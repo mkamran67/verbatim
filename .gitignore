@@ -1,0 +1,34 @@
+# Rust build output
+/target
+
+# Node dependencies & build output
+/ui/node_modules
+/ui/out
+/ui/dist
+/reactjs-ui/node_modules
+/reactjs-ui/out
+
+# One day there will be claude
+CLAUDE.md
+
+# Tauri generated bundles (installers, .deb, .AppImage, etc.)
+/src-tauri/gen/schemas
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log

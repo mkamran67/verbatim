@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
+  "productName": "Verbatim",
+  "version": "0.1.0",
+  "identifier": "com.verbatim.app",
+  "build": {
+    "frontendDist": "../ui/out",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "cd ../ui && npm run dev",
+    "beforeBuildCommand": "cd ../ui && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Verbatim",
+        "width": 960,
+        "height": 680,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "dmg", "app"],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns"
+    ]
+  }
+}
