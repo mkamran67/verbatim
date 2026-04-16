@@ -32,3 +32,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Release artifacts from scripts/package-release.py
+/dist/
