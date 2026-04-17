@@ -162,18 +162,41 @@ cargo test
 
 ## Installation
 
-### Homebrew (macOS & Linux)
+### Homebrew (macOS arm64 & Linux amd64)
+
+Each GPU backend is a **separate formula** — pick the one that matches your hardware:
 
 ```bash
 brew tap mkamran67/verbatim
-brew install verbatim                  # macOS (Metal) or Linux CPU
-brew install verbatim --with-cuda      # Linux NVIDIA (CUDA)
-brew install verbatim --with-vulkan    # Linux NVIDIA + AMD (Vulkan)
+
+brew install mkamran67/verbatim/verbatim          # macOS (Metal) or Linux CPU
+brew install mkamran67/verbatim/verbatim-cuda     # Linux NVIDIA (CUDA)
+brew install mkamran67/verbatim/verbatim-vulkan   # Linux NVIDIA + AMD (Vulkan)
 ```
 
-To switch GPU variant later:
+The three Linux variants conflict with each other (all install the `verbatim` binary), so to switch backends:
+
 ```bash
-brew reinstall verbatim --with-cuda
+brew uninstall verbatim-vulkan
+brew install mkamran67/verbatim/verbatim-cuda
+```
+
+**Supported hosts:** macOS Apple Silicon (arm64) and Linux amd64 only. Other hosts are rejected at install time.
+
+**Post-install (Linux only)** — add Verbatim to your application launcher:
+
+```bash
+mkdir -p ~/.local/share/applications ~/.local/share/icons/hicolor/512x512/apps
+ln -sf "$(brew --prefix)/share/applications/verbatim.desktop" ~/.local/share/applications/
+ln -sf "$(brew --prefix)/share/icons/hicolor/512x512/apps/verbatim.png" \
+       ~/.local/share/icons/hicolor/512x512/apps/
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+```
+
+Also add yourself to the `input` group so the global hotkey works:
+
+```bash
+sudo usermod -aG input $USER   # log out and back in
 ```
 
 ### Debian Package

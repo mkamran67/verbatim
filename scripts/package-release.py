@@ -33,6 +33,8 @@ BIN_CANDIDATES = [
     ROOT / "target" / "release" / "verbatim",
     ROOT / "src-tauri" / "target" / "release" / "verbatim",
 ]
+DESKTOP_FILE = ROOT / "assets" / "verbatim.desktop"
+ICON_FILE = ROOT / "src-tauri" / "icons" / "icon.png"  # 512x512
 
 LINUX_BACKENDS = ["cpu", "vulkan", "cuda"]
 
@@ -58,22 +60,21 @@ def read_version() -> str:
 
 
 def detect_arch(os_name: str) -> str:
-    """Per-OS arch naming: macOS uses Homebrew convention (x86_64/arm64),
-    Linux uses Debian convention (amd64/arm64). Matches the Homebrew formula."""
+    """Verbatim currently supports:
+      - macOS: Apple Silicon only (arm64)
+      - Linux: amd64 only
+    Refuses to build on any other combination."""
     m = platform.machine().lower()
     is_x86 = m in ("x86_64", "amd64")
     is_arm = m in ("arm64", "aarch64")
-    if os_name == "macos":
-        if is_x86:
-            return "x86_64"
-        if is_arm:
-            return "arm64"
-    elif os_name == "linux":
-        if is_x86:
-            return "amd64"
-        if is_arm:
-            return "arm64"
-    sys.exit(f"Unsupported arch '{m}' for OS '{os_name}'")
+    if os_name == "macos" and is_arm:
+        return "arm64"
+    if os_name == "linux" and is_x86:
+        return "amd64"
+    sys.exit(
+        f"Unsupported host: {os_name}/{m}. "
+        f"Verbatim builds only for macOS arm64 and Linux amd64."
+    )
 
 
 def fmt_duration(seconds: float) -> str:
@@ -125,6 +126,14 @@ def package(version: str, os_name: str, arch: str, backend: str | None) -> Path:
     log(f"    source binary: {bin_path} ({size_mb:.1f} MB)")
     with tarfile.open(out, "w:gz") as tar:
         tar.add(bin_path, arcname="verbatim")
+        # Linux tarballs also ship the desktop entry + icon so the Homebrew
+        # formula can install them to share/applications and share/icons.
+        if os_name == "linux":
+            for src, arc in [(DESKTOP_FILE, "verbatim.desktop"), (ICON_FILE, "verbatim.png")]:
+                if not src.exists():
+                    sys.exit(f"Required asset missing: {src}")
+                tar.add(src, arcname=arc)
+                log(f"    + {arc} ← {src}")
     out_mb = out.stat().st_size / (1024 * 1024)
     log(f"    tarball: {out_mb:.1f} MB")
     return out
