@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Verbatim needs microphone access to transcribe your speech to text.</string>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Verbatim needs Input Monitoring to detect your push-to-talk hotkey globally.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Verbatim uses AppleScript to detect the focused app so it can paste transcribed text into the right window.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Verbatim needs Accessibility access to insert transcribed text into other applications.</string>
+</dict>
+</plist>

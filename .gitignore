@@ -1,8 +1,8 @@
 # Rust build output
 target
 target/*
-src-tauri
-src-tauri/*
+src-tauri/target
+src-tauri/gen
 
 # Node dependencies & build output
 /ui/node_modules
@@ -13,6 +13,7 @@ src-tauri/*
 
 # Tauri generated bundles (installers, .deb, .AppImage, etc.)
 /src-tauri/gen/schemas
+
 
 # OS files
 .DS_Store
