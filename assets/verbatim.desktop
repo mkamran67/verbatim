@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=Verbatim
-Comment=Real-time speech-to-text with push-to-talk
-Exec=verbatim
-Icon=verbatim
-Type=Application
-Categories=Utility;Accessibility;
-Keywords=speech;voice;dictation;transcription;
-StartupNotify=false
