@@ -1,5 +1,8 @@
 # Rust build output
-/target
+target
+target/*
+src-tauri
+src-tauri/*
 
 # Node dependencies & build output
 /ui/node_modules
@@ -7,9 +10,6 @@
 /ui/dist
 /reactjs-ui/node_modules
 /reactjs-ui/out
-
-# One day there will be claude
-CLAUDE.md
 
 # Tauri generated bundles (installers, .deb, .AppImage, etc.)
 /src-tauri/gen/schemas
@@ -32,6 +32,16 @@ Thumbs.db
 
 # Logs
 *.log
+*.deb
 
-# Release artifacts from scripts/package-release.py
-/dist/
+# Release build output (scripts/build-release.sh)
+/releases
+
+# macOS signing secrets (real file is local-only; .example is committed)
+scripts/.macos-signing.env
+
+
+#if you use claude
+claude
+.claude
+CLAUDE.md

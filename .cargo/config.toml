@@ -1,0 +1,5 @@
+# CUDA library search path is handled by src-tauri/build.rs, which reads
+# $CUDA_PATH (falls back to /usr/lib/x86_64-linux-gnu for the Debian
+# nvidia-cuda-toolkit layout). Keeping a hardcoded -L here would pin the
+# linker to whichever libcudart_static.a landed in /usr/lib/x86_64-linux-gnu
+# first, overriding newer toolkits installed under /usr/local/cuda-*.
