@@ -7,7 +7,7 @@ import { sttEventReceived } from './slices/sttSlice';
 import { fetchWhisperModels, fetchLlmModels, whisperDownloadProgressUpdated, llmDownloadProgressUpdated } from './slices/modelsSlice';
 import { fetchStats } from './slices/statsSlice';
 import { fetchRecent } from './slices/transcriptionsSlice';
-import { fetchDeepgramBalance, fetchOpenaiBalance } from './slices/balanceSlice';
+import { fetchDeepgramBalance } from './slices/balanceSlice';
 
 export function useTauriListeners() {
   const dispatch = useAppDispatch();
@@ -22,7 +22,6 @@ export function useTauriListeners() {
           dispatch(fetchStats());
           dispatch(fetchRecent(50));
           dispatch(fetchDeepgramBalance(false));
-          dispatch(fetchOpenaiBalance(false));
         }
       }),
     );

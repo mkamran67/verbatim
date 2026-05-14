@@ -1,10 +1,11 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { api } from '../../lib/tauri';
-import type { Stats, DailyTokenUsage, DailyWordStats } from '../../lib/types';
+import type { Stats, DailyProviderUsage, DailyTokenUsage, DailyWordStats } from '../../lib/types';
 
 interface StatsState {
   data: Stats | null;
   dailyTokens: DailyTokenUsage[];
+  dailyProviderUsage: DailyProviderUsage[];
   dailyWords: DailyWordStats[];
   loading: boolean;
 }
@@ -12,12 +13,14 @@ interface StatsState {
 const initialState: StatsState = {
   data: null,
   dailyTokens: [],
+  dailyProviderUsage: [],
   dailyWords: [],
   loading: false,
 };
 
 export const fetchStats = createAsyncThunk('stats/fetch', () => api.getStats());
 export const fetchDailyTokenUsage = createAsyncThunk('stats/fetchDailyTokens', (days: number) => api.getDailyTokenUsage(days));
+export const fetchDailyProviderUsage = createAsyncThunk('stats/fetchDailyProviderUsage', (days: number) => api.getDailyProviderUsage(days));
 export const fetchDailyWordStats = createAsyncThunk('stats/fetchDailyWords', (days: number) => api.getDailyWordStats(days));
 
 const statsSlice = createSlice({
@@ -34,6 +37,9 @@ const statsSlice = createSlice({
       .addCase(fetchStats.rejected, (state) => { state.loading = false; })
       .addCase(fetchDailyTokenUsage.fulfilled, (state, action) => {
         state.dailyTokens = action.payload;
+      })
+      .addCase(fetchDailyProviderUsage.fulfilled, (state, action) => {
+        state.dailyProviderUsage = action.payload;
       })
       .addCase(fetchDailyWordStats.fulfilled, (state, action) => {
         state.dailyWords = action.payload;

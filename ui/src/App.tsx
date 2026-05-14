@@ -11,7 +11,7 @@ import { fetchConfig } from "./store/slices/configSlice";
 import { fetchStats } from "./store/slices/statsSlice";
 import { fetchWhisperModels, fetchLlmModels } from "./store/slices/modelsSlice";
 import { loadThemeFromConfig } from "./store/slices/themeSlice";
-import { fetchDeepgramBalance, fetchOpenaiBalance } from "./store/slices/balanceSlice";
+import { fetchDeepgramBalance } from "./store/slices/balanceSlice";
 import { fetchRecent } from "./store/slices/transcriptionsSlice";
 import { applyTheme } from "./lib/theme";
 import { api } from "./lib/tauri";
@@ -26,7 +26,6 @@ function TauriEventBridge() {
       if (fetchConfig.fulfilled.match(action)) {
         const config = action.payload;
         if (config.deepgram.api_key) dispatch(fetchDeepgramBalance(false));
-        if (config.openai.admin_key) dispatch(fetchOpenaiBalance(false));
         // Sync UI language from config
         const uiLang = config.general.ui_language;
         if (uiLang && uiLang !== 'system') {

@@ -17,14 +17,12 @@ pub struct CachedBalance {
 
 pub struct BalanceCache {
     pub deepgram: Option<CachedBalance>,
-    pub openai: Option<CachedBalance>,
 }
 
 impl BalanceCache {
     pub fn new() -> Self {
         Self {
             deepgram: None,
-            openai: None,
         }
     }
 }

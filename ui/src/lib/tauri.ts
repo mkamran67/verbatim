@@ -4,6 +4,7 @@ import type {
   Config,
   CreditBalance,
   DailyCostSummary,
+  DailyProviderUsage,
   DailyTokenUsage,
   DailyWordStats,
   DebugInfo,
@@ -31,6 +32,8 @@ export const api = {
     invoke<Transcription[]>("get_transcriptions_for_date", { date }),
   getDailyTokenUsage: (days: number) =>
     invoke<DailyTokenUsage[]>("get_daily_token_usage", { days }),
+  getDailyProviderUsage: (days: number) =>
+    invoke<DailyProviderUsage[]>("get_daily_provider_usage", { days }),
   getTokenUsageByModel: () =>
     invoke<ModelTokenUsage[]>("get_token_usage_by_model"),
   getRecent: (limit: number) =>
@@ -86,7 +89,6 @@ export const api = {
   checkLinuxInputPermission: () => invoke<boolean>("check_linux_input_permission"),
   openMacSettings: (pane: string) => invoke<void>("open_macos_settings", { pane }),
   checkDeepgramBalance: (force = false) => invoke<CreditBalance>("check_deepgram_balance", { force }),
-  checkOpenaiBalance: (force = false) => invoke<CreditBalance>("check_openai_balance", { force }),
   getDailyCostSummary: (days: number) =>
     invoke<DailyCostSummary[]>("get_daily_cost_summary", { days }),
   getCostByProvider: () =>

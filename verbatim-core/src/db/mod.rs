@@ -78,6 +78,15 @@ pub struct ProviderCostSummary {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DailyProviderUsage {
+    pub date: String,
+    pub provider: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub duration_secs: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelTokenUsage {
     pub model: String,
     pub prompt_tokens: i64,
@@ -502,6 +511,42 @@ impl Database {
             results.push(row?);
         }
         tracing::trace!(count = results.len(), "returning daily token usage");
+        Ok(results)
+    }
+
+    pub fn get_daily_provider_usage(&self, days: i64) -> Result<Vec<DailyProviderUsage>> {
+        tracing::trace!(days, "querying daily provider usage");
+        let since = (chrono::Local::now() - chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT date(created_at) as day,
+                    provider,
+                    COALESCE(SUM(prompt_tokens), 0),
+                    COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(audio_duration_secs), 0)
+             FROM api_cost
+             WHERE date(created_at) >= ?1
+             GROUP BY day, provider
+             ORDER BY day ASC",
+        )?;
+
+        let rows = stmt.query_map([&since], |row| {
+            Ok(DailyProviderUsage {
+                date: row.get(0)?,
+                provider: row.get(1)?,
+                prompt_tokens: row.get(2)?,
+                completion_tokens: row.get(3)?,
+                duration_secs: row.get(4)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        tracing::trace!(count = results.len(), "returning daily provider usage");
         Ok(results)
     }
 

@@ -33,6 +33,14 @@ export interface DailyTokenUsage {
   completion_tokens: number;
 }
 
+export interface DailyProviderUsage {
+  date: string;
+  provider: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  duration_secs: number;
+}
+
 export interface DailyWordStats {
   date: string;
   total_words: number;

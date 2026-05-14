@@ -3,7 +3,7 @@ use tauri::{Emitter, State};
 use verbatim_core::app::SttCommand;
 use verbatim_core::audio::capture;
 use verbatim_core::config::Config;
-use verbatim_core::db::{DailyCostSummary, DailyTokenUsage, DailyWordStats, ModelTokenUsage, ProviderCostSummary, Stats, Transcription};
+use verbatim_core::db::{DailyCostSummary, DailyProviderUsage, DailyTokenUsage, DailyWordStats, ModelTokenUsage, ProviderCostSummary, Stats, Transcription};
 use verbatim_core::input::window_detect;
 use verbatim_core::model_manager;
 use verbatim_core::ollama_manager;
@@ -590,7 +590,6 @@ pub async fn save_config(
     {
         let mut cache = state.balance_cache.lock().map_err(|e| e.to_string())?;
         cache.deepgram = None;
-        cache.openai = None;
     }
     let _ = app_handle.emit("config-changed", ());
     tracing::debug!("config saved and STT service notified");
@@ -642,6 +641,13 @@ pub async fn get_daily_token_usage(state: State<'_, AppState>, days: i64) -> Res
     tracing::debug!(days, "IPC: get_daily_token_usage");
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_daily_token_usage(days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_daily_provider_usage(state: State<'_, AppState>, days: i64) -> Result<Vec<DailyProviderUsage>, String> {
+    tracing::debug!(days, "IPC: get_daily_provider_usage");
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_daily_provider_usage(days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1908,97 +1914,6 @@ pub async fn check_deepgram_balance(state: State<'_, AppState>, force: bool) -> 
         kind: "balance".into(),
         amount: balance.amount,
         currency: balance.currency,
-        checked_at: now.to_rfc3339(),
-        estimated_usage_since: 0.0,
-        from_cache: false,
-    })
-}
-
-#[tauri::command]
-pub async fn check_openai_balance(state: State<'_, AppState>, force: bool) -> Result<CreditBalance, String> {
-    tracing::debug!(force, "IPC: check_openai_balance");
-
-    // Early check: bail if no admin key configured
-    {
-        let config = state.config.lock().await;
-        if config.openai.admin_key.is_empty() {
-            return Err("OpenAI Admin key not configured. Add it in API Keys settings.".into());
-        }
-    }
-
-    if !force {
-        let cached_data = {
-            let cache = state.balance_cache.lock().map_err(|e| e.to_string())?;
-            cache.openai.as_ref().and_then(|c| {
-                if c.checked_at_instant.elapsed() < BALANCE_CACHE_TTL {
-                    Some((c.balance, c.currency.clone(), c.kind.clone(), c.checked_at))
-                } else {
-                    None
-                }
-            })
-        };
-
-        if let Some((balance, currency, kind, checked_at)) = cached_data {
-            // Only "balance" kind makes the est-usage-since calculation meaningful;
-            // for cached "estimated_cost" the figure already aggregates a fixed window.
-            let estimated = if kind == "balance" {
-                let checked_at_str = checked_at.format("%Y-%m-%d %H:%M:%S").to_string();
-                let db = state.db.lock().map_err(|e| e.to_string())?;
-                db.get_estimated_costs_since(&checked_at_str, Some("openai")).unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            return Ok(CreditBalance {
-                provider: "openai".into(),
-                kind,
-                amount: balance,
-                currency,
-                checked_at: checked_at.to_rfc3339(),
-                estimated_usage_since: estimated,
-                from_cache: true,
-            });
-        }
-    }
-
-    let config = state.config.lock().await;
-    let admin_key = config.openai.admin_key.clone();
-    drop(config);
-
-    // 1. Try the legacy /dashboard/billing/credit_grants endpoint for a real
-    //    remaining balance. Works for prepaid-credit accounts.
-    // 2. On failure (pay-as-you-go, 4xx), fall back to /v1/organization/costs
-    //    for the last-30-days spend, marked as "estimated_cost" so the UI shows
-    //    the warning-triangle tooltip.
-    let (kind, amount): (&'static str, f64) =
-        match verbatim_core::stt::openai::check_credit_grants(&admin_key).await {
-            Ok(grants) => ("balance", grants.total_available),
-            Err(grants_err) => {
-                tracing::debug!(error = %grants_err, "credit_grants failed, falling back to costs");
-                let costs = verbatim_core::stt::openai::check_costs(&admin_key)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                ("estimated_cost", costs.total_cost_usd)
-            }
-        };
-
-    let now = chrono::Local::now();
-
-    {
-        let mut cache = state.balance_cache.lock().map_err(|e| e.to_string())?;
-        cache.openai = Some(crate::state::CachedBalance {
-            balance: amount,
-            currency: "usd".into(),
-            kind: kind.into(),
-            checked_at: now,
-            checked_at_instant: std::time::Instant::now(),
-        });
-    }
-
-    Ok(CreditBalance {
-        provider: "openai".into(),
-        kind: kind.into(),
-        amount,
-        currency: "usd".into(),
         checked_at: now.to_rfc3339(),
         estimated_usage_since: 0.0,
         from_cache: false,

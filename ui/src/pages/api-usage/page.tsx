@@ -3,10 +3,37 @@ import { useTranslation } from 'react-i18next';
 import Layout from '../../components/feature/Layout';
 import { open } from '@tauri-apps/plugin-shell';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { fetchStats, fetchDailyTokenUsage } from '@/store/slices/statsSlice';
+import { fetchStats, fetchDailyTokenUsage, fetchDailyProviderUsage } from '@/store/slices/statsSlice';
 import { fetchModelUsage, fetchProviderCosts } from '@/store/slices/transcriptionsSlice';
 import { fetchDeepgramBalance } from '@/store/slices/balanceSlice';
-import type { DailyTokenUsage } from '@/lib/types';
+import type { DailyTokenUsage, DailyProviderUsage } from '@/lib/types';
+
+// Providers billed by audio seconds (Deepgram, Smallest) don't emit token counts.
+// For visualization parity we approximate tokens from duration at ~2.5 tok/sec —
+// roughly 150 wpm of transcribed English. Clearly labeled as an estimate.
+const STT_TOKENS_PER_SEC = 2.5;
+const ESTIMATED_TOKEN_PROVIDERS = new Set(['deepgram', 'smallest']);
+
+const PROVIDER_META: Record<string, { label: string; color: string; bar: string; barHover: string; dot: string }> = {
+  'openai-stt':       { label: 'OpenAI Whisper',  color: '#10a37f', bar: 'bg-[#10a37f]', barHover: 'group-hover:bg-[#0d8a6a]', dot: 'bg-[#10a37f]' },
+  'openai-postproc':  { label: 'OpenAI GPT',      color: '#1a7f64', bar: 'bg-[#1a7f64]', barHover: 'group-hover:bg-[#125746]', dot: 'bg-[#1a7f64]' },
+  'deepgram':         { label: 'Deepgram',        color: '#7c3aed', bar: 'bg-[#7c3aed]', barHover: 'group-hover:bg-[#6d28d9]', dot: 'bg-[#7c3aed]' },
+  'smallest':         { label: 'Smallest',        color: '#ec4899', bar: 'bg-[#ec4899]', barHover: 'group-hover:bg-[#db2777]', dot: 'bg-[#ec4899]' },
+  'ollama':           { label: 'Ollama',          color: '#64748b', bar: 'bg-[#64748b]', barHover: 'group-hover:bg-[#475569]', dot: 'bg-[#64748b]' },
+};
+
+function providerMeta(id: string) {
+  return PROVIDER_META[id] ?? { label: id, color: '#94a3b8', bar: 'bg-slate-400', barHover: 'group-hover:bg-slate-500', dot: 'bg-slate-400' };
+}
+
+function estimateTokens(p: DailyProviderUsage): number {
+  const real = p.prompt_tokens + p.completion_tokens;
+  if (real > 0) return real;
+  if (ESTIMATED_TOKEN_PROVIDERS.has(p.provider) && p.duration_secs > 0) {
+    return Math.round(p.duration_secs * STT_TOKENS_PER_SEC);
+  }
+  return 0;
+}
 
 function formatCost(usd: number): string {
   if (usd === 0) return '$0.00';
@@ -55,13 +82,12 @@ export default function ApiUsage() {
   const dispatch = useAppDispatch();
   const stats = useAppSelector((s) => s.stats.data);
   const rawDailyTokens = useAppSelector((s) => s.stats.dailyTokens);
+  const dailyProviderUsage = useAppSelector((s) => s.stats.dailyProviderUsage);
   const modelUsage = useAppSelector((s) => s.transcriptions.modelUsage);
   const providerCosts = useAppSelector((s) => s.transcriptions.providerCosts);
   const deepgramBalance = useAppSelector((s) => s.balance.deepgram.data);
   const balanceLoading = useAppSelector((s) => s.balance.deepgram.loading);
   const balanceError = useAppSelector((s) => s.balance.deepgram.error);
-  const openaiBalance = useAppSelector((s) => s.balance.openai.data);
-  const openaiBalanceError = useAppSelector((s) => s.balance.openai.error);
   const [selectedDayIndex, setSelectedDayIndex] = useState(30);
 
   type ManualProvider = 'deepgram' | 'openai' | 'smallest';
@@ -140,6 +166,7 @@ export default function ApiUsage() {
   useEffect(() => {
     dispatch(fetchStats());
     dispatch(fetchDailyTokenUsage(31));
+    dispatch(fetchDailyProviderUsage(31));
     dispatch(fetchModelUsage());
     dispatch(fetchProviderCosts());
   }, [dispatch]);
@@ -160,6 +187,55 @@ export default function ApiUsage() {
   }, [rawDailyTokens]);
 
   const selectedDay = days[selectedDayIndex];
+
+  // Build 31-day per-provider matrix: { date, byProvider: { provider: {tokens, duration} } }
+  const providerDays = useMemo(() => {
+    const byDate: Record<string, Record<string, { tokens: number; duration: number; estimated: boolean }>> = {};
+    for (const row of dailyProviderUsage) {
+      const tokens = estimateTokens(row);
+      const estimated = ESTIMATED_TOKEN_PROVIDERS.has(row.provider);
+      if (!byDate[row.date]) byDate[row.date] = {};
+      byDate[row.date][row.provider] = { tokens, duration: row.duration_secs, estimated };
+    }
+    const result: { date: string; entries: { provider: string; tokens: number; duration: number; estimated: boolean }[]; totalTokens: number }[] = [];
+    for (let i = 30; i >= 0; i--) {
+      const dt = new Date();
+      dt.setDate(dt.getDate() - i);
+      const key = dt.toISOString().slice(0, 10);
+      const entries = Object.entries(byDate[key] ?? {})
+        .map(([provider, v]) => ({ provider, ...v }))
+        .sort((a, b) => b.tokens - a.tokens);
+      const totalTokens = entries.reduce((s, e) => s + e.tokens, 0);
+      result.push({ date: key, entries, totalTokens });
+    }
+    return result;
+  }, [dailyProviderUsage]);
+
+  const maxProviderDayTokens = Math.max(...providerDays.map((d) => d.totalTokens), 1);
+
+  // Audio seconds aggregated per provider over the window
+  const audioByProvider = useMemo(() => {
+    const sums: Record<string, number> = {};
+    for (const row of dailyProviderUsage) {
+      sums[row.provider] = (sums[row.provider] ?? 0) + row.duration_secs;
+    }
+    return Object.entries(sums)
+      .map(([provider, seconds]) => ({ provider, seconds }))
+      .filter((e) => e.seconds > 0)
+      .sort((a, b) => b.seconds - a.seconds);
+  }, [dailyProviderUsage]);
+
+  const maxAudioSeconds = Math.max(...audioByProvider.map((p) => p.seconds), 1);
+
+  const activeProviders = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of dailyProviderUsage) {
+      if (estimateTokens(row) > 0) set.add(row.provider);
+    }
+    return Array.from(set);
+  }, [dailyProviderUsage]);
+
+  const hasEstimatedProviders = activeProviders.some((p) => ESTIMATED_TOKEN_PROVIDERS.has(p));
 
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr + 'T00:00:00');
@@ -369,63 +445,28 @@ export default function ApiUsage() {
                   </button>
                 </div>
               </div>
-              {openaiBalance && openaiBalance.kind === 'balance' ? (
-                <div>
-                  <p className="text-slate-900 dark:text-slate-100 text-xl font-bold tabular-nums">
-                    ${openaiBalance.amount.toFixed(2)} <span className="text-xs font-normal text-slate-400">{openaiBalance.currency.toUpperCase()}</span>
-                  </p>
-                  <p className="text-slate-400 dark:text-slate-500 text-[10px] mt-1">
-                    {t('apiUsage.lastChecked', { time: formatTimeAgo(openaiBalance.checked_at) })}
-                    {openaiBalance.estimated_usage_since > 0 && (
-                      <> · {t('apiUsage.estUsageSince', { cost: formatCost(openaiBalance.estimated_usage_since) })}</>
-                    )}
-                  </p>
-                  <a
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); open('https://platform.openai.com/settings/organization/billing/overview'); }}
-                    className="text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 text-xs inline-flex items-center gap-0.5 mt-1"
-                  >
-                    {t('apiUsage.checkBalanceExternal')} <i className="ri-external-link-line text-[10px]" />
-                  </a>
-                </div>
-              ) : (
-                (() => {
-                  const fallbackAmount = openaiBalance && openaiBalance.kind === 'estimated_cost'
-                    ? openaiBalance.amount
-                    : providerCosts
-                        .filter((p) => p.provider.startsWith('openai'))
-                        .reduce((sum, p) => sum + p.total_cost_usd, 0);
-                  const checkedAt = openaiBalance ? openaiBalance.checked_at : null;
-                  return (
-                    <div>
-                      <p className="text-slate-900 dark:text-slate-100 text-xl font-bold tabular-nums inline-flex items-center gap-1.5">
-                        {formatCost(fallbackAmount)}
-                        <span className="relative group inline-flex items-center">
-                          <i className="ri-alert-line text-amber-500 text-sm cursor-help" />
-                          <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-slate-900 dark:bg-slate-700 text-white text-[10px] font-normal px-2.5 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all w-56 text-center pointer-events-none z-10">
-                            {t('apiUsage.estimatedCostTooltip')}
-                          </span>
-                        </span>
-                      </p>
-                      <p className="text-slate-400 dark:text-slate-500 text-[10px] mt-1">
-                        {checkedAt
-                          ? t('apiUsage.lastChecked', { time: formatTimeAgo(checkedAt) })
-                          : t('apiUsage.estimatedFromUsage')}
-                      </p>
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); open('https://platform.openai.com/settings/organization/billing/overview'); }}
-                        className="text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 text-xs inline-flex items-center gap-0.5 mt-1"
-                      >
-                        {t('apiUsage.checkBalanceExternal')} <i className="ri-external-link-line text-[10px]" />
-                      </a>
-                      {openaiBalanceError && !openaiBalanceError.includes('not configured') && (
-                        <p className="text-amber-500 dark:text-amber-400 text-[10px] mt-1">{openaiBalanceError}</p>
-                      )}
-                    </div>
-                  );
-                })()
-              )}
+              {(() => {
+                const estimatedSpend = providerCosts
+                  .filter((p) => p.provider.startsWith('openai'))
+                  .reduce((sum, p) => sum + p.total_cost_usd, 0);
+                return (
+                  <div>
+                    <p className="text-slate-900 dark:text-slate-100 text-xl font-bold tabular-nums">
+                      {formatCost(estimatedSpend)}
+                    </p>
+                    <p className="text-slate-400 dark:text-slate-500 text-[10px] mt-1">
+                      {t('apiUsage.estimatedFromUsage')}
+                    </p>
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); open('https://platform.openai.com/settings/organization/billing/overview'); }}
+                      className="text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 text-xs inline-flex items-center gap-0.5 mt-1"
+                    >
+                      {t('apiUsage.checkBalanceExternal')} <i className="ri-external-link-line text-[10px]" />
+                    </a>
+                  </div>
+                );
+              })()}
               {renderManualBalance('openai')}
             </div>
             {/* Smallest Balance — no public balance API; estimated spend + manual entry only */}
@@ -615,6 +656,112 @@ export default function ApiUsage() {
             )}
           </div>
         </div>
+
+        {/* Daily tokens by provider */}
+        {providerDays.some((d) => d.totalTokens > 0) && (
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700 p-5">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 flex items-center justify-center rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20">
+                  <i className="ri-stack-line text-sm text-violet-500" />
+                </div>
+                <h2 className="text-slate-900 dark:text-slate-100 font-semibold text-sm">Daily tokens by provider</h2>
+              </div>
+              <div className="flex items-center gap-4 flex-wrap">
+                {activeProviders.map((id) => {
+                  const m = providerMeta(id);
+                  return (
+                    <div key={id} className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: m.color }} />
+                      <span className="text-slate-500 dark:text-slate-400 text-[10px]">
+                        {m.label}
+                        {ESTIMATED_TOKEN_PROVIDERS.has(id) ? ' (est.)' : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {hasEstimatedProviders && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-3 inline-flex items-center gap-1.5">
+                <i className="ri-information-line" />
+                Deepgram and Smallest are billed by audio seconds and do not return token counts. Their values are estimated at ~{STT_TOKENS_PER_SEC} tokens/sec of audio.
+              </p>
+            )}
+
+            <div className="overflow-x-auto">
+              <div className="flex items-end gap-1.5 min-w-[600px]" style={{ height: '140px' }}>
+                {providerDays.map((day) => {
+                  const shortDate = day.date.slice(5);
+                  return (
+                    <div key={day.date} className="flex-1 flex flex-col items-center gap-1">
+                      <div className="relative w-full flex flex-col-reverse items-center justify-end" style={{ height: '110px' }}>
+                        {day.totalTokens === 0 ? (
+                          <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-sm" style={{ height: '4px' }} />
+                        ) : (
+                          day.entries.map((e) => {
+                            const m = providerMeta(e.provider);
+                            const pct = (e.tokens / maxProviderDayTokens) * 100;
+                            return (
+                              <div key={e.provider} className="relative w-full group" style={{ height: `${pct}%`, minHeight: '2px' }}>
+                                <div
+                                  className="w-full h-full transition-opacity opacity-90 hover:opacity-100"
+                                  style={{ backgroundColor: m.color }}
+                                />
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-slate-900 dark:bg-slate-700 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-all whitespace-nowrap pointer-events-none z-10">
+                                  This is for {m.label}.<br />
+                                  {e.tokens.toLocaleString()} tokens{e.estimated ? ' (est.)' : ''}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                      <span className="text-[9px] text-slate-400 dark:text-slate-500">{shortDate}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Audio seconds by provider */}
+        {audioByProvider.length > 0 && (
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700">
+            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-700">
+              <h2 className="text-slate-900 dark:text-slate-100 font-semibold text-sm">Audio seconds by provider</h2>
+              <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">Total audio sent to each provider over the last 31 days.</p>
+            </div>
+            <div className="divide-y divide-slate-50 dark:divide-slate-700/50">
+              {audioByProvider.map((p) => {
+                const m = providerMeta(p.provider);
+                const pct = (p.seconds / maxAudioSeconds) * 100;
+                return (
+                  <div key={p.provider} className="px-5 py-3.5 flex flex-col gap-2 group relative">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-800 dark:text-slate-200 text-sm font-medium inline-flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: m.color }} />
+                        {m.label}
+                      </span>
+                      <div className="flex items-center gap-4">
+                        <span className="text-slate-500 text-xs tabular-nums">{(p.seconds / 60).toFixed(1)} min</span>
+                        <span className="text-slate-600 dark:text-slate-300 text-xs font-semibold tabular-nums w-20 text-right">{Math.round(p.seconds).toLocaleString()} s</span>
+                      </div>
+                    </div>
+                    <div className="bg-slate-100 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: m.color }} />
+                    </div>
+                    <div className="absolute left-5 -top-1 bg-slate-900 dark:bg-slate-700 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-all whitespace-nowrap pointer-events-none z-10">
+                      This is for {m.label}.
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Usage by model */}
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700">

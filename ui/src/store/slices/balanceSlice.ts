@@ -10,24 +10,17 @@ interface BalanceEntry {
 
 interface BalanceState {
   deepgram: BalanceEntry;
-  openai: BalanceEntry;
 }
 
 const initialEntry: BalanceEntry = { data: null, loading: false, error: null };
 
 const initialState: BalanceState = {
   deepgram: { ...initialEntry },
-  openai: { ...initialEntry },
 };
 
 export const fetchDeepgramBalance = createAsyncThunk(
   'balance/fetchDeepgram',
   (force: boolean) => api.checkDeepgramBalance(force),
-);
-
-export const fetchOpenaiBalance = createAsyncThunk(
-  'balance/fetchOpenai',
-  (force: boolean) => api.checkOpenaiBalance(force),
 );
 
 const balanceSlice = createSlice({
@@ -47,18 +40,6 @@ const balanceSlice = createSlice({
       .addCase(fetchDeepgramBalance.rejected, (state, action) => {
         state.deepgram.loading = false;
         state.deepgram.error = action.error.message ?? 'Failed to fetch balance';
-      })
-      .addCase(fetchOpenaiBalance.pending, (state) => {
-        state.openai.loading = true;
-        state.openai.error = null;
-      })
-      .addCase(fetchOpenaiBalance.fulfilled, (state, action) => {
-        state.openai.data = action.payload;
-        state.openai.loading = false;
-      })
-      .addCase(fetchOpenaiBalance.rejected, (state, action) => {
-        state.openai.loading = false;
-        state.openai.error = action.error.message ?? 'Failed to fetch balance';
       });
   },
 });
