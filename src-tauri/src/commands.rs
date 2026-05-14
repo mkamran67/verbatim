@@ -591,6 +591,12 @@ pub async fn save_config(
         let mut cache = state.balance_cache.lock().map_err(|e| e.to_string())?;
         cache.deepgram = None;
     }
+
+    // Reconcile the managed Ollama daemon against the new config — start it
+    // if PP just got turned on with provider=ollama+managed, stop it if PP
+    // was turned off or switched away.
+    reconcile_managed_ollama(&app_handle, &*state).await;
+
     let _ = app_handle.emit("config-changed", ());
     tracing::debug!("config saved and STT service notified");
     Ok(())
@@ -655,6 +661,188 @@ pub async fn get_token_usage_by_model(state: State<'_, AppState>) -> Result<Vec<
     tracing::debug!("IPC: get_token_usage_by_model");
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db.get_token_usage_by_model().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct FactoryResetStep {
+    pub name: String,
+    pub ok: bool,
+    pub detail: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct FactoryResetReport {
+    pub success: bool,
+    pub steps: Vec<FactoryResetStep>,
+}
+
+fn ok_step(name: &str) -> FactoryResetStep {
+    FactoryResetStep { name: name.into(), ok: true, detail: None }
+}
+fn fail_step(name: &str, detail: impl Into<String>) -> FactoryResetStep {
+    FactoryResetStep { name: name.into(), ok: false, detail: Some(detail.into()) }
+}
+
+/// Wipe a directory tree and verify it's gone. Returns a step describing the
+/// outcome. A missing source dir is treated as success ("already gone").
+fn wipe_dir_step(name: &str, path: &std::path::Path) -> FactoryResetStep {
+    if !path.exists() {
+        return FactoryResetStep {
+            name: name.into(),
+            ok: true,
+            detail: Some(format!("already absent ({})", path.display())),
+        };
+    }
+    if let Err(e) = std::fs::remove_dir_all(path) {
+        return fail_step(name, format!("remove_dir_all({}): {}", path.display(), e));
+    }
+    if path.exists() {
+        return fail_step(name, format!("{} still exists after delete", path.display()));
+    }
+    ok_step(name)
+}
+
+fn wipe_file_step(name: &str, path: &std::path::Path) -> FactoryResetStep {
+    if !path.exists() {
+        return FactoryResetStep {
+            name: name.into(),
+            ok: true,
+            detail: Some(format!("already absent ({})", path.display())),
+        };
+    }
+    if let Err(e) = std::fs::remove_file(path) {
+        return fail_step(name, format!("remove_file({}): {}", path.display(), e));
+    }
+    if path.exists() {
+        return fail_step(name, format!("{} still exists after delete", path.display()));
+    }
+    ok_step(name)
+}
+
+/// Wipe Verbatim back to a first-run state. Removes API keys (keyring),
+/// the entire stats DB, downloaded Whisper/LLM models, the managed Ollama
+/// install, log files, and the on-disk config file. In-memory config is
+/// replaced with defaults so `onboarding_complete` flips back to false and
+/// the UI re-enters the onboarding flow.
+///
+/// Every destructive step is independently verified (file/dir really gone,
+/// keyring really empty). The caller gets back a per-step report so the UI
+/// can surface partial failures instead of silently pretending success.
+#[tauri::command]
+pub async fn factory_reset(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<FactoryResetReport, String> {
+    tracing::warn!("IPC: factory_reset — wiping all user data");
+
+    let mut steps: Vec<FactoryResetStep> = Vec::new();
+
+    // Snapshot paths we'll need (from the *current* config, before reset) so
+    // that custom model directories are honored.
+    let (whisper_dir, llm_dir) = {
+        let cfg = state.config.lock().await;
+        (cfg.resolved_model_dir(), cfg.resolved_llm_model_dir())
+    };
+
+    // 1. Stop the managed Ollama child if we spawned one. Failing to kill it
+    //    blocks the ollama dir wipe on Windows-style locks (rare on macOS/Linux
+    //    but worth verifying), so we wait for it to actually exit.
+    {
+        let mut guard = state.ollama_child.lock().await;
+        if let Some(mut child) = guard.take() {
+            let _ = child.start_kill();
+            match child.wait().await {
+                Ok(_) => steps.push(ok_step("stop_managed_ollama")),
+                Err(e) => steps.push(fail_step("stop_managed_ollama", e.to_string())),
+            }
+        } else {
+            steps.push(FactoryResetStep {
+                name: "stop_managed_ollama".into(),
+                ok: true,
+                detail: Some("not running".into()),
+            });
+        }
+    }
+
+    // 2. Stop the mic monitor.
+    {
+        let mut guard = state.mic_monitor_stop.lock().await;
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(());
+        }
+        steps.push(ok_step("stop_mic_monitor"));
+    }
+
+    // 3. Wipe the SQLite database content (the connection stays live, so we
+    //    don't delete the DB file — we DELETE all rows + VACUUM instead).
+    match state.db.lock() {
+        Ok(db) => match db.wipe_all_data() {
+            Ok(()) => steps.push(ok_step("wipe_database")),
+            Err(e) => steps.push(fail_step("wipe_database", e.to_string())),
+        },
+        Err(e) => steps.push(fail_step("wipe_database", format!("db lock poisoned: {}", e))),
+    }
+
+    // 4. Delete the four keyring secrets and verify each is actually gone by
+    //    reading it back. delete_secret swallows errors internally, so the
+    //    read-back is our only way to know it stuck.
+    for key in ["openai_api_key", "deepgram_api_key", "smallest_api_key"] {
+        verbatim_core::keyring_store::delete_secret(key);
+        let step_name = format!("keyring_{}", key);
+        match verbatim_core::keyring_store::get_secret(key) {
+            None => steps.push(ok_step(&step_name)),
+            Some(_) => steps.push(fail_step(&step_name, "secret still present after delete")),
+        }
+    }
+
+    // 5. Wipe downloaded models, managed Ollama install, and logs.
+    let data_dir_root = dirs::data_dir().unwrap_or_default();
+    let data_dir = data_dir_root.join("verbatim");
+    let ollama_root = ollama_manager::managed_root(&data_dir_root);
+    let logs_dir = data_dir.join("logs");
+    let default_llm_dir = data_dir.join("llm-models");
+
+    steps.push(wipe_dir_step("delete_whisper_models", &whisper_dir));
+    if llm_dir != default_llm_dir {
+        steps.push(wipe_dir_step("delete_llm_models_custom", &llm_dir));
+    }
+    steps.push(wipe_dir_step("delete_llm_models", &default_llm_dir));
+    steps.push(wipe_dir_step("delete_managed_ollama", &ollama_root));
+    steps.push(wipe_dir_step("delete_logs", &logs_dir));
+
+    // 6. Delete the on-disk config so a stale TOML can't resurrect old values.
+    steps.push(wipe_file_step("delete_config_file", &Config::config_path()));
+
+    // 7. Replace the in-memory config with defaults, then push it through the
+    //    STT service so the running backend tears down any loaded model/keys.
+    let default_cfg = Config::default();
+    *state.config.lock().await = default_cfg.clone();
+    if state.stt_cmd_tx.send(SttCommand::UpdateConfig(default_cfg)).is_ok() {
+        steps.push(ok_step("reset_in_memory_config"));
+    } else {
+        steps.push(fail_step("reset_in_memory_config", "STT service channel closed"));
+    }
+
+    // 8. Reset the balance cache so the UI doesn't surface stale credit figures.
+    match state.balance_cache.lock() {
+        Ok(mut cache) => {
+            cache.deepgram = None;
+            steps.push(ok_step("clear_balance_cache"));
+        }
+        Err(e) => steps.push(fail_step("clear_balance_cache", e.to_string())),
+    }
+
+    let _ = app_handle.emit("config-changed", ());
+
+    let success = steps.iter().all(|s| s.ok);
+    if success {
+        tracing::warn!(steps = steps.len(), "factory_reset complete (all steps ok)");
+    } else {
+        let failed: Vec<&str> = steps.iter().filter(|s| !s.ok).map(|s| s.name.as_str()).collect();
+        tracing::error!(failed = ?failed, "factory_reset finished with failures");
+    }
+
+    Ok(FactoryResetReport { success, steps })
 }
 
 #[tauri::command]
@@ -1000,6 +1188,47 @@ fn drain_log_tail(
     log_tail: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
 ) -> Vec<String> {
     log_tail.lock().map(|q| q.iter().cloned().collect()).unwrap_or_default()
+}
+
+/// Bring the managed Ollama daemon into line with the current post-processing
+/// config. If the user has PP enabled with provider=ollama and mode=managed
+/// (and the binary is installed), spawn it. Otherwise — PP disabled, switched
+/// to a different provider, or pointing at an `existing`/`custom` Ollama
+/// instance the user manages — shut down whatever managed child we hold.
+///
+/// `existing` and `custom` modes are intentionally left untouched: those refer
+/// to Ollama processes that aren't ours, so we have no business killing them.
+pub async fn reconcile_managed_ollama(app: &tauri::AppHandle, state: &AppState) {
+    let (enabled, provider, mode) = {
+        let cfg = state.config.lock().await;
+        (
+            cfg.post_processing.enabled,
+            cfg.post_processing.provider.clone(),
+            cfg.post_processing.ollama_mode.clone(),
+        )
+    };
+    let should_run = enabled && provider == "ollama" && mode == "managed";
+
+    if should_run {
+        let Some(data_dir) = dirs::data_dir() else { return };
+        if !ollama_manager::managed_binary(&data_dir).exists() {
+            // Binary not installed — nothing to spawn. The install command
+            // takes care of spawning after install.
+            return;
+        }
+        if let Err(e) = spawn_managed_ollama(app, state).await {
+            tracing::warn!(error = %e, "reconcile: managed Ollama spawn failed");
+        }
+    } else {
+        let mut guard = state.ollama_child.lock().await;
+        if let Some(mut child) = guard.take() {
+            tracing::info!(
+                enabled, %provider, %mode,
+                "reconcile: shutting down managed Ollama (no longer needed)"
+            );
+            ollama_manager::shutdown(&mut child).await;
+        }
+    }
 }
 
 /// Spawn the managed Ollama daemon, store the Child in AppState, and emit

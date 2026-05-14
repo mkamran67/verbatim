@@ -91,7 +91,6 @@ export interface Config {
   };
   openai: {
     api_key: string;
-    admin_key: string;
     model: string;
   };
   deepgram: {
@@ -106,6 +105,7 @@ export interface Config {
     min_duration: number;
     energy_threshold: number;
     noise_cancellation: boolean;
+    play_chimes: boolean;
   };
   input: {
     method: string;
@@ -274,4 +274,15 @@ export interface DebugInfo {
   stt: SttRuntime;
   pp: PpRuntime;
   app_vram_mb: number | null;
+}
+
+export interface FactoryResetStep {
+  name: string;
+  ok: boolean;
+  detail: string | null;
+}
+
+export interface FactoryResetReport {
+  success: boolean;
+  steps: FactoryResetStep[];
 }

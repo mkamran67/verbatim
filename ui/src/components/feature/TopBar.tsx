@@ -573,7 +573,10 @@ export default function TopBar({ title, subtitle }: TopBarProps) {
   const currentLabel = current === 'custom' ? t('common.custom') : (PRESETS.find((p) => p.key === current)?.labelKey ? t(PRESETS.find((p) => p.key === current)!.labelKey) : t('topbar.preset.local'));
   const isDeepgram = config?.general.backend === 'deepgram';
   const isSmallest = config?.general.backend === 'smallest';
-  const sttOnlyBackend = isDeepgram || isSmallest;
+  // Smallest is genuinely STT-only (no PP path), but Deepgram users can opt
+  // into an LLM cleanup pass even though Deepgram's smart_format already
+  // handles most punctuation/capitalization.
+  const sttOnlyBackend = isSmallest;
 
   const ppModelValue = config
     ? config.post_processing.provider === 'openai'

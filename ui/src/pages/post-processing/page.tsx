@@ -187,9 +187,8 @@ export default function PostProcessing() {
 
           <SettingRow label={t('common.enabled')} description={t('pp.enabledDesc')}>
             <Toggle
-              on={config.general.backend === 'deepgram' ? false : config.post_processing.enabled}
+              on={config.post_processing.enabled}
               onChange={(v) => {
-                if (config.general.backend === 'deepgram') return;
                 if (v && config.post_processing.provider === 'openai' && !config.openai.api_key) {
                   setKeyWarning('post-processing');
                   return;
@@ -201,7 +200,6 @@ export default function PostProcessing() {
                 setKeyWarning(null);
                 update((c) => { c.post_processing.enabled = v; });
               }}
-              disabled={config.general.backend === 'deepgram'}
             />
           </SettingRow>
 

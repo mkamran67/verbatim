@@ -274,6 +274,23 @@ impl Database {
         Ok(())
     }
 
+    /// Drop every row from every Verbatim-owned table. Used by Factory Reset.
+    /// The schema itself is preserved so the connection stays valid; the only
+    /// effect is to reset stats, transcriptions, and cost history to zero.
+    pub fn wipe_all_data(&self) -> Result<()> {
+        tracing::warn!("wiping all rows from all tables (factory reset)");
+        self.conn.execute_batch(
+            "BEGIN;\
+             DELETE FROM api_cost;\
+             DELETE FROM token_usage;\
+             DELETE FROM daily_stats;\
+             DELETE FROM transcriptions;\
+             COMMIT;\
+             VACUUM;",
+        )?;
+        Ok(())
+    }
+
     pub fn insert_token_usage(
         &self,
         transcription_id: &str,

@@ -146,6 +146,7 @@ fn main() {
             commands::get_recent,
             commands::search_history,
             commands::delete_transcription,
+            commands::factory_reset,
             commands::pause_hotkey,
             commands::resume_hotkey,
             commands::capture_hotkey,
@@ -222,15 +223,18 @@ fn main() {
                                     .current_app_state
                                     .swap(state::encode_app_state(*app_state), Ordering::Relaxed);
                                 let prev = state::decode_app_state(prev_encoded);
-                                match (prev, *app_state) {
-                                    (CoreAppState::Idle, CoreAppState::Recording) => {
-                                        chime::play(chime::Chime::Start);
+                                let play_chimes = cfg_state.config.lock().await.audio.play_chimes;
+                                if play_chimes {
+                                    match (prev, *app_state) {
+                                        (CoreAppState::Idle, CoreAppState::Recording) => {
+                                            chime::play(chime::Chime::Start);
+                                        }
+                                        (CoreAppState::Recording, CoreAppState::Processing)
+                                        | (CoreAppState::Recording, CoreAppState::Idle) => {
+                                            chime::play(chime::Chime::Stop);
+                                        }
+                                        _ => {}
                                     }
-                                    (CoreAppState::Recording, CoreAppState::Processing)
-                                    | (CoreAppState::Recording, CoreAppState::Idle) => {
-                                        chime::play(chime::Chime::Stop);
-                                    }
-                                    _ => {}
                                 }
                             }
 
@@ -308,15 +312,21 @@ fn main() {
                 }
             });
 
-            // Auto-spawn managed Ollama on startup if configured + binary exists.
+            // Auto-spawn managed Ollama on startup if PP is actually using it.
+            // Gating on `enabled` too means we don't pin RAM/VRAM for a daemon
+            // the user has turned off in the PP page.
             let auto_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = auto_handle.state::<state::AppState>();
-                let (provider, mode) = {
+                let (enabled, provider, mode) = {
                     let cfg = state.config.lock().await;
-                    (cfg.post_processing.provider.clone(), cfg.post_processing.ollama_mode.clone())
+                    (
+                        cfg.post_processing.enabled,
+                        cfg.post_processing.provider.clone(),
+                        cfg.post_processing.ollama_mode.clone(),
+                    )
                 };
-                if provider != "ollama" || mode != "managed" {
+                if !enabled || provider != "ollama" || mode != "managed" {
                     return;
                 }
                 let data_dir = match dirs::data_dir() {

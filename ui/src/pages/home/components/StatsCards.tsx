@@ -1,23 +1,41 @@
 import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
-import { fetchDailyTokenUsage } from '@/store/slices/statsSlice';
-import type { DailyTokenUsage } from '@/lib/types';
+import { fetchDailyTokenUsage, fetchDailyProviderUsage } from '@/store/slices/statsSlice';
+import type { DailyTokenUsage, DailyProviderUsage } from '@/lib/types';
+import { ESTIMATED_TOKEN_PROVIDERS, estimatedTokensForProvider } from '@/lib/tokenEstimate';
+import DayUsageTooltip from '@/components/feature/DayUsageTooltip';
+import HoverTooltip from '@/components/feature/HoverTooltip';
 
 export default function StatsCards() {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const stats = useAppSelector((s) => s.stats.data);
   const rawDailyTokens = useAppSelector((s) => s.stats.dailyTokens);
+  const rawProviderUsage = useAppSelector((s) => s.stats.dailyProviderUsage);
 
   useEffect(() => {
     dispatch(fetchDailyTokenUsage(7));
+    dispatch(fetchDailyProviderUsage(7));
   }, [dispatch]);
 
-  // Always show 7 days with today as the rightmost
+  // Always show 7 days with today as the rightmost. Real token counts are
+  // summed from `dailyTokens`; STT providers that don't return tokens
+  // (Deepgram, Smallest) are estimated from their audio seconds and added
+  // to the input side so the totals here match the API Usage page.
   const dailyTokens = useMemo(() => {
     const lookup: Record<string, DailyTokenUsage> = {};
-    for (const d of rawDailyTokens) lookup[d.date] = d;
+    for (const d of rawDailyTokens) {
+      lookup[d.date] = { ...d };
+    }
+    for (const row of rawProviderUsage) {
+      if (!ESTIMATED_TOKEN_PROVIDERS.has(row.provider)) continue;
+      const est = estimatedTokensForProvider(row.provider, row.duration_secs);
+      if (est === 0) continue;
+      const existing = lookup[row.date] || { date: row.date, prompt_tokens: 0, completion_tokens: 0 };
+      existing.prompt_tokens += est;
+      lookup[row.date] = existing;
+    }
 
     const days: DailyTokenUsage[] = [];
     for (let i = 6; i >= 0; i--) {
@@ -27,7 +45,21 @@ export default function StatsCards() {
       days.push(lookup[key] || { date: key, prompt_tokens: 0, completion_tokens: 0 });
     }
     return days;
-  }, [rawDailyTokens]);
+  }, [rawDailyTokens, rawProviderUsage]);
+
+  const hasEstimated = useMemo(
+    () => rawProviderUsage.some((r) => ESTIMATED_TOKEN_PROVIDERS.has(r.provider) && r.duration_secs > 0),
+    [rawProviderUsage]
+  );
+
+  // Provider rows indexed by date for the per-bar hover tooltip.
+  const providerRowsByDate = useMemo(() => {
+    const map: Record<string, DailyProviderUsage[]> = {};
+    for (const row of rawProviderUsage) {
+      (map[row.date] ||= []).push(row);
+    }
+    return map;
+  }, [rawProviderUsage]);
 
   const cards = [
     {
@@ -115,7 +147,12 @@ export default function StatsCards() {
               <span className="w-2.5 h-2.5 rounded-sm bg-amber-300" />
               <span className="text-slate-500 dark:text-slate-400 text-[10px]">{t('stats.output')} ({totalOutput.toLocaleString()})</span>
             </div>
-            <span className="text-slate-400 dark:text-slate-500 text-[10px]">{t('stats.total')}: {(totalInput + totalOutput).toLocaleString()}</span>
+            <span
+              className="text-slate-400 dark:text-slate-500 text-[10px]"
+              title={hasEstimated ? 'Includes estimated tokens for Deepgram/Smallest (audio-billed).' : undefined}
+            >
+              {t('stats.total')}: {(totalInput + totalOutput).toLocaleString()}{hasEstimated ? ' (incl. est.)' : ''}
+            </span>
           </div>
         </div>
 
@@ -128,27 +165,28 @@ export default function StatsCards() {
             const shortDate = day.date.slice(5);
             return (
               <div key={day.date} className="flex-1 flex flex-col items-center gap-1 group">
-                <div className="relative w-full flex flex-col items-center justify-end" style={{ height: '80px' }}>
-                  {total > 0 ? (
-                    <div className="w-full flex flex-col-reverse items-center h-full">
-                      <div
-                        className="w-full rounded-b-sm bg-orange-400 group-hover:bg-orange-500 transition-all"
-                        style={{ height: `${inputPct}%`, minHeight: '2px' }}
-                      />
-                      <div
-                        className="w-full rounded-t-sm bg-amber-300 group-hover:bg-amber-400 transition-all"
-                        style={{ height: `${outputPct}%`, minHeight: '2px' }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-sm" style={{ height: '4px' }} />
-                  )}
-                  {total > 0 && (
-                    <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-900 dark:bg-slate-700 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-all whitespace-nowrap pointer-events-none z-10">
-                      In: {day.prompt_tokens.toLocaleString()} · Out: {day.completion_tokens.toLocaleString()}
-                    </div>
-                  )}
-                </div>
+                <HoverTooltip
+                  className="relative w-full flex flex-col items-center justify-end"
+                  disabled={total === 0}
+                  content={<DayUsageTooltip date={day.date} rows={providerRowsByDate[day.date] ?? []} />}
+                >
+                  <div className="w-full flex flex-col items-center justify-end" style={{ height: '80px' }}>
+                    {total > 0 ? (
+                      <div className="w-full flex flex-col-reverse items-center h-full">
+                        <div
+                          className="w-full rounded-b-sm bg-orange-400 group-hover:bg-orange-500 transition-all"
+                          style={{ height: `${inputPct}%`, minHeight: '2px' }}
+                        />
+                        <div
+                          className="w-full rounded-t-sm bg-amber-300 group-hover:bg-amber-400 transition-all"
+                          style={{ height: `${outputPct}%`, minHeight: '2px' }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-sm" style={{ height: '4px' }} />
+                    )}
+                  </div>
+                </HoverTooltip>
                 <span className="text-[9px] text-slate-400 dark:text-slate-500">{shortDate}</span>
               </div>
             );

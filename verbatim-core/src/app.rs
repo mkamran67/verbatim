@@ -65,13 +65,14 @@ async fn process_and_output(ctx: &ProcessContext<'_>) -> Result<AppState> {
     let process_start = std::time::Instant::now();
 
     let _ = ctx.recording_tx.send(false);
-    let _ = ctx.gui_tx.send(SttEvent::StateChanged(AppState::Processing));
 
     let samples = ctx.audio_buffer.take();
     let sample_count = samples.len();
     let duration_secs = sample_count as f32 / 16_000.0;
     tracing::debug!(sample_count, duration_secs = format_args!("{:.1}", duration_secs), "audio samples collected");
 
+    // Gate silent / too-short clips BEFORE announcing Processing so the UI
+    // doesn't flicker into a processing state when there's nothing to do.
     if samples.is_empty() || duration_secs < ctx.min_duration {
         if samples.is_empty() {
             tracing::warn!("No audio captured");
@@ -82,33 +83,20 @@ async fn process_and_output(ctx: &ProcessContext<'_>) -> Result<AppState> {
         return Ok(AppState::Idle);
     }
 
-    // Always-on silence detection: check if the recording contains any
-    // audible signal. We compute the RMS energy and the peak amplitude.
-    // If both are near zero, skip STT entirely — there's nothing to transcribe.
-    {
+    if !crate::audio::silence::has_voiced_content(&samples, 16_000) {
+        tracing::info!(
+            duration_secs = format_args!("{:.2}", duration_secs),
+            "no voiced content detected, skipping STT"
+        );
+        let _ = ctx.gui_tx.send(SttEvent::StateChanged(AppState::Idle));
+        return Ok(AppState::Idle);
+    }
+
+    // User-configurable energy threshold (applies on top of the voiced gate).
+    if ctx.energy_threshold > 0.0 {
         let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
         let rms = (sum_sq / samples.len() as f32).sqrt();
-        let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-
-        tracing::debug!(rms = format_args!("{:.5}", rms), peak = format_args!("{:.5}", peak), "audio level check");
-
-        // Hard floor: if peak amplitude is below 0.003 (~-50 dB), the mic
-        // captured only noise/silence — no human speech could be this quiet.
-        const SILENCE_PEAK: f32 = 0.003;
-        // Soft floor: RMS below 0.002 with a low peak means ambient noise only.
-        const SILENCE_RMS: f32 = 0.002;
-
-        if peak < SILENCE_PEAK && rms < SILENCE_RMS {
-            tracing::info!(
-                "No audio detected (RMS={:.5}, peak={:.5}), skipping STT",
-                rms, peak
-            );
-            let _ = ctx.gui_tx.send(SttEvent::StateChanged(AppState::Idle));
-            return Ok(AppState::Idle);
-        }
-
-        // User-configurable energy threshold (on top of the always-on check)
-        if ctx.energy_threshold > 0.0 && rms < ctx.energy_threshold {
+        if rms < ctx.energy_threshold {
             tracing::info!(
                 "Audio RMS {:.4} below threshold {:.4}, treating as silence",
                 rms, ctx.energy_threshold
@@ -118,6 +106,7 @@ async fn process_and_output(ctx: &ProcessContext<'_>) -> Result<AppState> {
         }
     }
 
+    let _ = ctx.gui_tx.send(SttEvent::StateChanged(AppState::Processing));
     tracing::info!("Processing {:.1}s of audio...", duration_secs);
 
     // Apply noise cancellation if enabled
@@ -209,13 +198,12 @@ async fn process_and_output(ctx: &ProcessContext<'_>) -> Result<AppState> {
                 }
             }
 
-            // Post-process if enabled (skip for Deepgram — smart_format handles it)
+            // Post-process if enabled. Deepgram already runs smart_format, so an
+            // LLM pass on top is usually redundant, but we still let the user
+            // opt in — the toggle in the PP page decides, not the STT backend.
             let mut post_processing_error: Option<String> = None;
             let raw_text_before_pp = text.clone();
-            let text = if ctx.backend_name == "deepgram" {
-                tracing::debug!("Skipping post-processing: Deepgram smart_format handles formatting");
-                text
-            } else if let Some(ref pp) = ctx.post_processor {
+            let text = if let Some(ref pp) = ctx.post_processor {
                 tracing::info!(text_len = text.len(), model = %pp.model(), "about to call post_processor.process");
                 let pp = Arc::clone(pp);
                 let raw = text.clone();
@@ -1231,11 +1219,67 @@ mod tests {
         let state = process_and_output(&ctx).await.unwrap();
         assert_eq!(state, AppState::Idle);
 
-        // Should receive Processing then Idle state changes
-        let event = gui_rx.recv().await.unwrap();
-        assert!(matches!(event, SttEvent::StateChanged(AppState::Processing)));
+        // Short clip is gated before Processing is announced — UI sees only
+        // a transition back to Idle (no Processing flicker).
         let event = gui_rx.recv().await.unwrap();
         assert!(matches!(event, SttEvent::StateChanged(AppState::Idle)));
+        assert!(gui_rx.try_recv().is_err(), "no further state events expected");
+    }
+
+    #[tokio::test]
+    async fn test_process_silent_audio_skips_processing_event() {
+        let (gui_tx, mut gui_rx) = mpsc::unbounded_channel();
+        let (recording_tx, _recording_rx) = watch::channel(true);
+
+        struct MockBackend;
+        #[async_trait::async_trait]
+        impl SttBackend for MockBackend {
+            fn name(&self) -> &str { "mock" }
+            async fn transcribe(&self, _audio: &[f32], _language: Option<&str>) -> Result<String, crate::errors::SttError> {
+                panic!("transcribe must not be called for a silent buffer");
+            }
+        }
+
+        let backend: Arc<dyn SttBackend> = Arc::new(MockBackend);
+        let audio_buffer = AudioBuffer::new();
+        // 1.5 s of dead silence plus a single stray click — passes the old
+        // peak/RMS gate but must be rejected by the voiced-content check.
+        {
+            let shared = audio_buffer.shared();
+            let mut buf = shared.lock().unwrap();
+            buf.resize(24_000, 0.0);
+            buf[12_000] = 1.0;
+        }
+
+        let ctx = ProcessContext {
+            audio_buffer: &audio_buffer,
+            recording_tx: &recording_tx,
+            backend: &backend,
+            backend_name: "mock",
+            backend_model: "",
+            fallback_backend: &None,
+            post_processor: &None,
+            gui_tx: &gui_tx,
+            db: &None,
+            clipboard_only: true,
+            input_method: "auto",
+            paste_command: "meta+v",
+            paste_rules: &[],
+            min_duration: 0.5,
+            energy_threshold: 0.0,
+            noise_cancellation: false,
+            language: &None,
+        };
+
+        let state = process_and_output(&ctx).await.unwrap();
+        assert_eq!(state, AppState::Idle);
+
+        let event = gui_rx.recv().await.unwrap();
+        assert!(matches!(event, SttEvent::StateChanged(AppState::Idle)));
+        assert!(
+            gui_rx.try_recv().is_err(),
+            "silent buffer must not emit a Processing event"
+        );
     }
 
     // ── Edge case tests ──────────────────────────────────

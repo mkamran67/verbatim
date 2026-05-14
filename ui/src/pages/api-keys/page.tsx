@@ -140,22 +140,6 @@ export default function ApiKeys() {
 
           <div className="flex flex-wrap items-center justify-between gap-2 py-4 border-b border-slate-50 dark:border-slate-700">
             <div className="flex-1 pr-8">
-              <p className="text-slate-800 dark:text-slate-200 text-sm font-medium">{t('apiKeys.openaiAdminKey')}</p>
-              <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">{t('apiKeys.openaiAdminKeyDesc')}{' '}
-                <a href="#" onClick={(e) => { e.preventDefault(); open('https://platform.openai.com/settings/organization/admin-keys'); }} className="text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 inline-flex items-center gap-0.5">{t('apiKeys.getKey')} <i className="ri-external-link-line text-[10px]" /></a>
-              </p>
-            </div>
-            <input
-              type="password"
-              value={config.openai.admin_key}
-              onChange={(e) => update((c) => { c.openai.admin_key = e.target.value; })}
-              placeholder="sk-admin-..."
-              className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 outline-none w-full sm:w-64 font-mono"
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-2 py-4 border-b border-slate-50 dark:border-slate-700">
-            <div className="flex-1 pr-8">
               <p className="text-slate-800 dark:text-slate-200 text-sm font-medium">{t('apiKeys.deepgramKey')}</p>
               <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">{t('apiKeys.deepgramKeyDesc')}{' '}
                 <a href="#" onClick={(e) => { e.preventDefault(); open('https://console.deepgram.com/'); }} className="text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 inline-flex items-center gap-0.5">{t('apiKeys.getKey')} <i className="ri-external-link-line text-[10px]" /></a>

@@ -7,12 +7,14 @@ import { fetchStats, fetchDailyTokenUsage, fetchDailyProviderUsage } from '@/sto
 import { fetchModelUsage, fetchProviderCosts } from '@/store/slices/transcriptionsSlice';
 import { fetchDeepgramBalance } from '@/store/slices/balanceSlice';
 import type { DailyTokenUsage, DailyProviderUsage } from '@/lib/types';
-
-// Providers billed by audio seconds (Deepgram, Smallest) don't emit token counts.
-// For visualization parity we approximate tokens from duration at ~2.5 tok/sec —
-// roughly 150 wpm of transcribed English. Clearly labeled as an estimate.
-const STT_TOKENS_PER_SEC = 2.5;
-const ESTIMATED_TOKEN_PROVIDERS = new Set(['deepgram', 'smallest']);
+import {
+  STT_TOKENS_PER_SEC,
+  ESTIMATED_TOKEN_PROVIDERS,
+  estimatedTokensForProvider,
+  providerRole,
+} from '@/lib/tokenEstimate';
+import DayUsageTooltip from '@/components/feature/DayUsageTooltip';
+import HoverTooltip from '@/components/feature/HoverTooltip';
 
 const PROVIDER_META: Record<string, { label: string; color: string; bar: string; barHover: string; dot: string }> = {
   'openai-stt':       { label: 'OpenAI Whisper',  color: '#10a37f', bar: 'bg-[#10a37f]', barHover: 'group-hover:bg-[#0d8a6a]', dot: 'bg-[#10a37f]' },
@@ -29,10 +31,7 @@ function providerMeta(id: string) {
 function estimateTokens(p: DailyProviderUsage): number {
   const real = p.prompt_tokens + p.completion_tokens;
   if (real > 0) return real;
-  if (ESTIMATED_TOKEN_PROVIDERS.has(p.provider) && p.duration_secs > 0) {
-    return Math.round(p.duration_secs * STT_TOKENS_PER_SEC);
-  }
-  return 0;
+  return estimatedTokensForProvider(p.provider, p.duration_secs);
 }
 
 function formatCost(usd: number): string {
@@ -212,6 +211,15 @@ export default function ApiUsage() {
   }, [dailyProviderUsage]);
 
   const maxProviderDayTokens = Math.max(...providerDays.map((d) => d.totalTokens), 1);
+
+  // Per-date provider rows for the daily-token-chart hover tooltip.
+  const providerRowsByDate = useMemo(() => {
+    const map: Record<string, DailyProviderUsage[]> = {};
+    for (const row of dailyProviderUsage) {
+      (map[row.date] ||= []).push(row);
+    }
+    return map;
+  }, [dailyProviderUsage]);
 
   // Audio seconds aggregated per provider over the window
   const audioByProvider = useMemo(() => {
@@ -575,7 +583,7 @@ export default function ApiUsage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto pb-3">
           <div className="flex items-end gap-1.5 min-w-[600px]" style={{ height: '140px' }}>
             {days.map((day, idx) => {
               const total = day.prompt_tokens + day.completion_tokens;
@@ -589,27 +597,28 @@ export default function ApiUsage() {
                   className={`flex-1 flex flex-col items-center gap-1 group cursor-pointer rounded-lg transition-all ${isSelected ? 'bg-slate-50 dark:bg-slate-700/50' : ''}`}
                   onClick={() => setSelectedDayIndex(idx)}
                 >
-                  <div className="relative w-full flex flex-col items-center justify-end" style={{ height: '110px' }}>
-                    {total > 0 ? (
-                      <div className="w-full flex flex-col-reverse items-center h-full">
-                        <div
-                          className="w-full rounded-b-sm bg-orange-400 group-hover:bg-orange-500 transition-all"
-                          style={{ height: `${inputPct}%`, minHeight: '2px' }}
-                        />
-                        <div
-                          className="w-full rounded-t-sm bg-amber-300 group-hover:bg-amber-400 transition-all"
-                          style={{ height: `${outputPct}%`, minHeight: '2px' }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-sm" style={{ height: '4px' }} />
-                    )}
-                    {total > 0 && (
-                      <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-900 dark:bg-slate-700 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-all whitespace-nowrap pointer-events-none z-10">
-                        {t('stats.input')}: {day.prompt_tokens.toLocaleString()} · {t('stats.output')}: {day.completion_tokens.toLocaleString()}
-                      </div>
-                    )}
-                  </div>
+                  <HoverTooltip
+                    className="relative w-full flex flex-col items-center justify-end"
+                    disabled={total === 0}
+                    content={<DayUsageTooltip date={day.date} rows={providerRowsByDate[day.date] ?? []} />}
+                  >
+                    <div className="w-full flex flex-col items-center justify-end" style={{ height: '110px' }}>
+                      {total > 0 ? (
+                        <div className="w-full flex flex-col-reverse items-center h-full">
+                          <div
+                            className="w-full rounded-b-sm bg-orange-400 group-hover:bg-orange-500 transition-all"
+                            style={{ height: `${inputPct}%`, minHeight: '2px' }}
+                          />
+                          <div
+                            className="w-full rounded-t-sm bg-amber-300 group-hover:bg-amber-400 transition-all"
+                            style={{ height: `${outputPct}%`, minHeight: '2px' }}
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-sm" style={{ height: '4px' }} />
+                      )}
+                    </div>
+                  </HoverTooltip>
                   <span className={`text-[9px] ${isSelected ? 'text-orange-500 font-semibold' : 'text-slate-400 dark:text-slate-500'}`}>{shortDate}</span>
                 </div>
               );
@@ -690,7 +699,7 @@ export default function ApiUsage() {
               </p>
             )}
 
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto pb-3 pt-8">
               <div className="flex items-end gap-1.5 min-w-[600px]" style={{ height: '140px' }}>
                 {providerDays.map((day) => {
                   const shortDate = day.date.slice(5);
@@ -703,16 +712,35 @@ export default function ApiUsage() {
                           day.entries.map((e) => {
                             const m = providerMeta(e.provider);
                             const pct = (e.tokens / maxProviderDayTokens) * 100;
+                            const role = providerRole(e.provider);
+                            const roleLabel = role === 'stt' ? 'Speech-to-text' : 'Post-processing';
+                            const durationLabel = e.duration > 0
+                              ? (e.duration < 60 ? `${Math.round(e.duration)}s` : `${Math.floor(e.duration / 60)}m ${Math.round(e.duration % 60)}s`)
+                              : '';
                             return (
-                              <div key={e.provider} className="relative w-full group" style={{ height: `${pct}%`, minHeight: '2px' }}>
-                                <div
-                                  className="w-full h-full transition-opacity opacity-90 hover:opacity-100"
-                                  style={{ backgroundColor: m.color }}
-                                />
-                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-slate-900 dark:bg-slate-700 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-all whitespace-nowrap pointer-events-none z-10">
-                                  This is for {m.label}.<br />
-                                  {e.tokens.toLocaleString()} tokens{e.estimated ? ' (est.)' : ''}
-                                </div>
+                              <div
+                                key={e.provider}
+                                className="w-full"
+                                style={{ height: `${pct}%`, minHeight: '2px' }}
+                              >
+                                <HoverTooltip
+                                  className="w-full h-full"
+                                  content={
+                                    <div className="text-left min-w-[180px]">
+                                      <div className="text-[9px] uppercase tracking-wider text-slate-400 mb-0.5">{roleLabel}</div>
+                                      <div className="text-[11px] font-semibold text-slate-100">{m.label}</div>
+                                      <div className="text-[10px] tabular-nums text-slate-200 mt-0.5">
+                                        {e.tokens.toLocaleString()} tokens{e.estimated ? ' (est.)' : ''}
+                                      </div>
+                                      {durationLabel && (
+                                        <div className="text-[10px] tabular-nums text-slate-400">{durationLabel} audio</div>
+                                      )}
+                                      <div className="text-[10px] tabular-nums text-slate-400 mt-0.5">{day.date}</div>
+                                    </div>
+                                  }
+                                >
+                                  <div className="w-full h-full transition-opacity opacity-90 hover:opacity-100" style={{ backgroundColor: m.color }} />
+                                </HoverTooltip>
                               </div>
                             );
                           })

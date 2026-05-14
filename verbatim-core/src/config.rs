@@ -180,8 +180,6 @@ pub struct WhisperConfig {
 pub struct OpenAiConfig {
     #[serde(default)]
     pub api_key: String,
-    #[serde(default)]
-    pub admin_key: String,
     #[serde(default = "default_openai_model")]
     pub model: String,
 }
@@ -210,6 +208,8 @@ pub struct AudioConfig {
     pub energy_threshold: f32,
     #[serde(default)]
     pub noise_cancellation: bool,
+    #[serde(default = "default_play_chimes")]
+    pub play_chimes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +300,7 @@ fn default_openai_model() -> String { "whisper-1".into() }
 fn default_deepgram_model() -> String { "nova-2".into() }
 fn default_min_duration() -> f32 { 0.5 }
 fn default_energy_threshold() -> f32 { 0.0 }
+fn default_play_chimes() -> bool { true }
 fn default_input_method() -> String { "auto".into() }
 fn default_paste_command() -> String {
     #[cfg(target_os = "macos")]
@@ -373,7 +374,6 @@ impl Default for OpenAiConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            admin_key: String::new(),
             model: default_openai_model(),
         }
     }
@@ -403,6 +403,7 @@ impl Default for AudioConfig {
             min_duration: default_min_duration(),
             energy_threshold: default_energy_threshold(),
             noise_cancellation: false,
+            play_chimes: default_play_chimes(),
         }
     }
 }
@@ -535,16 +536,6 @@ impl Config {
             migrated = true;
         }
 
-        if let Some(key) = keyring_store::get_secret("openai_admin_key") {
-            if !key.is_empty() {
-                keyring_store::seed_write_cache("openai_admin_key", &key);
-                config.openai.admin_key = key;
-            }
-        } else if !config.openai.admin_key.is_empty() {
-            tracing::info!("migrating openai.admin_key from config file to keyring");
-            migrated = true;
-        }
-
         if let Some(key) = keyring_store::get_secret("deepgram_api_key") {
             if !key.is_empty() {
                 keyring_store::seed_write_cache("deepgram_api_key", &key);
@@ -577,12 +568,6 @@ impl Config {
             if let Ok(key) = std::env::var("OPENAI_API_KEY") {
                 tracing::debug!("overriding openai.api_key from OPENAI_API_KEY env var");
                 config.openai.api_key = key;
-            }
-        }
-        if config.openai.admin_key.is_empty() {
-            if let Ok(key) = std::env::var("OPENAI_ADMIN_KEY") {
-                tracing::debug!("overriding openai.admin_key from OPENAI_ADMIN_KEY env var");
-                config.openai.admin_key = key;
             }
         }
         if config.deepgram.api_key.is_empty() {
@@ -664,7 +649,6 @@ impl Config {
         if keyring_ok {
             // Strip keys from TOML — they're safely in the keyring
             sanitized.openai.api_key = String::new();
-            sanitized.openai.admin_key = String::new();
             sanitized.deepgram.api_key = String::new();
             sanitized.smallest.api_key = String::new();
         } else {
@@ -686,10 +670,9 @@ impl Config {
             return false;
         }
         let ok1 = keyring_store::store_secret_if_changed("openai_api_key", &self.openai.api_key).is_ok();
-        let ok1b = keyring_store::store_secret_if_changed("openai_admin_key", &self.openai.admin_key).is_ok();
         let ok2 = keyring_store::store_secret_if_changed("deepgram_api_key", &self.deepgram.api_key).is_ok();
         let ok3 = keyring_store::store_secret_if_changed("smallest_api_key", &self.smallest.api_key).is_ok();
-        ok1 && ok1b && ok2 && ok3
+        ok1 && ok2 && ok3
     }
 
     /// Resolve the model directory path, expanding ~ if present.
@@ -896,7 +879,6 @@ model = "small"
 
         // Clean up keyring entries left by save_to
         crate::keyring_store::delete_secret("openai_api_key");
-        crate::keyring_store::delete_secret("openai_admin_key");
         crate::keyring_store::delete_secret("deepgram_api_key");
         crate::keyring_store::delete_secret("smallest_api_key");
     }

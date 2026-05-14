@@ -63,9 +63,18 @@ function ThemeApplier() {
 function PermissionGate({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const onboardingComplete = useAppSelector((s) => s.config.data?.general.onboarding_complete);
+  const configLoaded = useAppSelector((s) => s.config.data != null);
 
   useEffect(() => {
     if (location.pathname === "/onboarding") return;
+    if (!configLoaded) return; // wait for fetchConfig to land before deciding
+
+    // First-run / factory-reset: no config or onboarding flag never flipped.
+    if (onboardingComplete === false) {
+      navigate("/onboarding", { replace: true });
+      return;
+    }
 
     let cancelled = false;
 
@@ -92,7 +101,7 @@ function PermissionGate({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [location.pathname, navigate]);
+  }, [location.pathname, navigate, onboardingComplete, configLoaded]);
 
   return <>{children}</>;
 }

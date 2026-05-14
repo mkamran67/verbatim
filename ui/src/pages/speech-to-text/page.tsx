@@ -33,6 +33,7 @@ export default function SpeechToText() {
   const [openWindows, setOpenWindows] = useState<string[]>([]);
   const [modelPrompt, setModelPrompt] = useState<{ name: string; downloading: boolean } | null>(null);
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
+  const [gpuBackend, setGpuBackend] = useState<string | null>(null);
 
   useEffect(() => {
     if (storeConfig) setConfig(structuredClone(storeConfig));
@@ -42,7 +43,11 @@ export default function SpeechToText() {
     api.listAudioDevices().then(setDevices).catch(() => {});
     api.listOpenWindows().then(setOpenWindows).catch(() => {});
     api.getSystemInfo().then(setSysInfo).catch(() => {});
+    api.getDebugInfo().then((d) => setGpuBackend(d.gpu_backend)).catch(() => {});
   }, []);
+
+  // Threads only matter for CPU inference; GPU builds offload the model entirely.
+  const isGpuBuild = gpuBackend != null && gpuBackend !== 'cpu';
 
   useEffect(() => {
     if (!downloadProgress && modelPrompt?.downloading) {
@@ -522,7 +527,9 @@ export default function SpeechToText() {
               type="number"
               value={config.whisper.threads}
               onChange={(e) => update((c) => { c.whisper.threads = parseInt(e.target.value) || 0; })}
-              className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 outline-none w-20"
+              disabled={isGpuBuild}
+              title={isGpuBuild ? t('stt.threadsGpuDisabled', { backend: gpuBackend?.toUpperCase() }) : undefined}
+              className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 outline-none w-20 disabled:opacity-50 disabled:cursor-not-allowed"
               min={0}
             />
           </SettingRow>

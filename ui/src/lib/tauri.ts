@@ -8,6 +8,7 @@ import type {
   DailyTokenUsage,
   DailyWordStats,
   DebugInfo,
+  FactoryResetReport,
   ProviderCostSummary,
   Stats,
   SystemInfo,
@@ -42,6 +43,7 @@ export const api = {
     invoke<Transcription[]>("search_history", { query, limit, offset }),
   deleteTranscription: (id: string) =>
     invoke<void>("delete_transcription", { id }),
+  factoryReset: () => invoke<FactoryResetReport>("factory_reset"),
   pauseHotkey: () => invoke<void>("pause_hotkey"),
   resumeHotkey: () => invoke<void>("resume_hotkey"),
   captureHotkey: (target: "ptt" | "handsfree") =>

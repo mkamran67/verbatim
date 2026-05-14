@@ -1,9 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { open } from '@tauri-apps/plugin-shell';
 import { api } from '@/lib/tauri';
-import type { DebugInfo } from '@/lib/types';
+import type { DebugInfo, FactoryResetReport } from '@/lib/types';
 import { SettingRow } from './SettingRow';
+import { useAppDispatch } from '@/store/hooks';
+import { fetchConfig } from '@/store/slices/configSlice';
+import { fetchStats } from '@/store/slices/statsSlice';
+import { fetchWhisperModels, fetchLlmModels } from '@/store/slices/modelsSlice';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -213,8 +218,56 @@ function RuntimeBlock({ info }: { info: DebugInfo }) {
 
 export default function DebugSection() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const dispatch = useAppDispatch();
   const [enabled, setEnabled] = useState(false);
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetReport, setResetReport] = useState<FactoryResetReport | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const clearWebStorage = useCallback(() => {
+    // localStorage holds card-order, preset snapshots, manual-balance overrides.
+    // All of it represents user state that factory reset should also wipe.
+    try { localStorage.clear(); } catch (e) { console.error('localStorage.clear failed', e); }
+    try { sessionStorage.clear(); } catch (e) { console.error('sessionStorage.clear failed', e); }
+  }, []);
+
+  const factoryReset = useCallback(async () => {
+    setResetBusy(true);
+    setResetError(null);
+    setResetReport(null);
+    try {
+      const report = await api.factoryReset();
+      setResetReport(report);
+
+      // Clear UI-side persistent state regardless of backend success — these
+      // live in the webview's localStorage, not on disk, and there's no harm.
+      clearWebStorage();
+
+      // Refresh redux state so the UI reflects post-reset reality.
+      await Promise.all([
+        dispatch(fetchConfig()),
+        dispatch(fetchStats()),
+        dispatch(fetchWhisperModels()),
+        dispatch(fetchLlmModels()),
+      ]);
+
+      if (report.success) {
+        // Tiny delay so the user sees the green "all clear" before redirect.
+        setTimeout(() => navigate('/onboarding', { replace: true }), 600);
+      } else {
+        // Partial failure: keep the dialog open and surface what failed so the
+        // user can manually intervene rather than silently leaving leftovers.
+        setResetBusy(false);
+      }
+    } catch (e) {
+      console.error('factory_reset failed', e);
+      setResetError(String(e));
+      setResetBusy(false);
+    }
+  }, [dispatch, navigate, clearWebStorage]);
 
   const fetchDebugInfo = useCallback(() => {
     api.getDebugInfo().then(setDebugInfo).catch(console.error);
@@ -359,6 +412,169 @@ export default function DebugSection() {
                 label={t('debug.gpuMonitoringAmd')}
                 command="watch -n1 rocm-smi"
               />
+            )}
+          </div>
+
+          {/* Danger zone — Factory Reset */}
+          <div className="mt-2 pt-4 border-t border-red-100 dark:border-red-500/20">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-red-50 dark:bg-red-500/10 flex items-center justify-center flex-shrink-0">
+                <i className="ri-alert-line text-red-500 text-base" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-slate-900 dark:text-slate-100 font-semibold text-sm">
+                  {t('debug.factoryReset')}
+                </p>
+                <p className="text-slate-400 dark:text-slate-500 text-xs mt-0.5">
+                  {t('debug.factoryResetDesc')}
+                </p>
+              </div>
+            </div>
+
+            {!resetConfirming && !resetBusy && !resetReport && !resetError && (
+              <button
+                onClick={() => setResetConfirming(true)}
+                className="px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-red-500 hover:bg-red-600 text-white"
+              >
+                <i className="ri-delete-bin-line mr-1.5" />
+                {t('debug.factoryResetButton')}
+              </button>
+            )}
+
+            {resetConfirming && !resetBusy && !resetReport && !resetError && (
+              <div className="rounded-lg border border-red-200 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/5 p-3">
+                <p className="text-xs text-red-700 dark:text-red-300 mb-3 leading-relaxed">
+                  {t('debug.factoryResetConfirm')}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={factoryReset}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-red-600 hover:bg-red-700 text-white"
+                  >
+                    <i className="ri-delete-bin-line mr-1.5" />
+                    {t('debug.factoryResetConfirmButton')}
+                  </button>
+                  <button
+                    onClick={() => setResetConfirming(false)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {resetBusy && (
+              <div className="rounded-lg border border-red-200 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/5 p-4">
+                <div className="flex items-center gap-3">
+                  <i className="ri-loader-4-line animate-spin text-red-500 text-xl" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-red-700 dark:text-red-300">
+                      {t('debug.factoryResetBusy')}
+                    </p>
+                    <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">
+                      {t('debug.factoryResetBusyDesc')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {resetReport && (
+              <div
+                className={`rounded-lg border p-3 ${
+                  resetReport.success
+                    ? 'border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-500/5'
+                    : 'border-amber-200 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/5'
+                }`}
+              >
+                <div className="flex items-start gap-2 mb-3">
+                  <i
+                    className={
+                      resetReport.success
+                        ? 'ri-checkbox-circle-fill text-emerald-500 text-lg'
+                        : 'ri-error-warning-fill text-amber-500 text-lg'
+                    }
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p
+                      className={`text-sm font-semibold ${
+                        resetReport.success
+                          ? 'text-emerald-700 dark:text-emerald-300'
+                          : 'text-amber-700 dark:text-amber-300'
+                      }`}
+                    >
+                      {resetReport.success
+                        ? t('debug.factoryResetDone')
+                        : t('debug.factoryResetPartial')}
+                    </p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                      {resetReport.success
+                        ? t('debug.factoryResetDoneDesc')
+                        : t('debug.factoryResetPartialDesc')}
+                    </p>
+                  </div>
+                </div>
+                <ul className="space-y-1 max-h-48 overflow-y-auto">
+                  {resetReport.steps.map((s) => (
+                    <li key={s.name} className="flex items-start gap-2 text-xs font-mono">
+                      <i
+                        className={
+                          s.ok
+                            ? 'ri-check-line text-emerald-500 mt-0.5'
+                            : 'ri-close-line text-red-500 mt-0.5'
+                        }
+                      />
+                      <div className="min-w-0 flex-1">
+                        <span className={s.ok ? 'text-slate-600 dark:text-slate-300' : 'text-red-700 dark:text-red-300 font-semibold'}>
+                          {s.name}
+                        </span>
+                        {s.detail && (
+                          <p className="text-slate-400 dark:text-slate-500 text-[10px] break-words mt-0.5">
+                            {s.detail}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {!resetReport.success && (
+                  <button
+                    onClick={() => {
+                      setResetReport(null);
+                      setResetConfirming(false);
+                    }}
+                    className="mt-3 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {resetError && !resetReport && (
+              <div className="rounded-lg border border-red-300 dark:border-red-500/40 bg-red-50 dark:bg-red-500/10 p-3">
+                <div className="flex items-start gap-2">
+                  <i className="ri-close-circle-fill text-red-500 text-lg" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-red-700 dark:text-red-300">
+                      {t('debug.factoryResetFailed')}
+                    </p>
+                    <p className="text-xs font-mono text-red-600 dark:text-red-400 mt-1 break-words">
+                      {resetError}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setResetError(null);
+                    setResetConfirming(false);
+                  }}
+                  className="mt-3 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300"
+                >
+                  {t('common.cancel')}
+                </button>
+              </div>
             )}
           </div>
         </div>

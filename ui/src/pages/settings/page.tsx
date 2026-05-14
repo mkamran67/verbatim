@@ -133,6 +133,13 @@ export default function Settings() {
             />
           </SettingRow>
 
+          <SettingRow label={t('settings.audioCue')} description={t('settings.audioCueDesc')}>
+            <Toggle
+              on={config.audio.play_chimes}
+              onChange={(v) => update((c) => { c.audio.play_chimes = v; })}
+            />
+          </SettingRow>
+
           <SettingRow label={t('settings.testMicrophone')} description={t('settings.testMicrophoneDesc')}>
             <button
               onClick={async () => {
