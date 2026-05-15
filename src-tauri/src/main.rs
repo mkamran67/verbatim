@@ -295,6 +295,7 @@ fn main() {
                                     cfg.input.paste_rules.push(verbatim_core::config::PasteRule {
                                         app_class: app_class.clone(),
                                         paste_command: paste_command.clone(),
+                                        output_mode: verbatim_core::config::OutputMode::Paste,
                                     });
                                     if let Err(e) = cfg.save() {
                                         tracing::warn!(error = %e, "failed to persist auto-detected paste rule");

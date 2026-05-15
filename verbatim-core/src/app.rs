@@ -45,6 +45,7 @@ struct ProcessContext<'a> {
     input_method: &'a str,
     paste_command: &'a str,
     paste_rules: &'a [crate::config::PasteRule],
+    default_output_mode: crate::config::OutputMode,
     min_duration: f32,
     energy_threshold: f32,
     noise_cancellation: bool,
@@ -284,6 +285,7 @@ async fn process_and_output(ctx: &ProcessContext<'_>) -> Result<AppState> {
                                     let new_rule = crate::config::PasteRule {
                                         app_class: active_trim.to_string(),
                                         paste_command: crate::input::terminal_detect::DEFAULT_TERMINAL_PASTE_COMMAND.to_string(),
+                                        output_mode: crate::config::OutputMode::Paste,
                                     };
                                     tracing::info!(
                                         app_class = %new_rule.app_class,
@@ -307,7 +309,7 @@ async fn process_and_output(ctx: &ProcessContext<'_>) -> Result<AppState> {
                 if let Err(e) = clipboard::copy_to_clipboard(&text) {
                     tracing::error!("Clipboard error: {}", e);
                 } else {
-                    match EnigoBackend::new(ctx.input_method, ctx.paste_command, &augmented_rules) {
+                    match EnigoBackend::new(ctx.input_method, ctx.paste_command, &augmented_rules, ctx.default_output_mode) {
                         Ok(mut input) => {
                             if let Err(e) = input.type_text(&text) {
                                 tracing::error!("Typing error: {}", e);
@@ -658,6 +660,7 @@ impl SttService {
         let mut input_method = self.config.input.method.clone();
         let mut paste_command = self.config.input.paste_command.clone();
         let mut paste_rules = self.config.input.paste_rules.clone();
+        let mut default_output_mode = self.config.input.default_output_mode;
         let mut min_duration = self.config.audio.min_duration;
         let mut energy_threshold = self.config.audio.energy_threshold;
         let mut noise_cancellation = self.config.audio.noise_cancellation;
@@ -710,6 +713,7 @@ impl SttService {
                                 input_method: &input_method,
                                 paste_command: &paste_command,
                                 paste_rules: &paste_rules,
+                                default_output_mode,
                                 min_duration,
                                 energy_threshold,
                                 noise_cancellation,
@@ -753,6 +757,7 @@ impl SttService {
                                 input_method: &input_method,
                                 paste_command: &paste_command,
                                 paste_rules: &paste_rules,
+                                default_output_mode,
                                 min_duration,
                                 energy_threshold,
                                 noise_cancellation,
@@ -810,6 +815,7 @@ impl SttService {
                                             input_method: &input_method,
                                             paste_command: &paste_command,
                                             paste_rules: &paste_rules,
+                                default_output_mode,
                                             min_duration,
                                             energy_threshold,
                                             noise_cancellation,
@@ -841,6 +847,7 @@ impl SttService {
                             input_method = new_config.input.method.clone();
                             paste_command = new_config.input.paste_command.clone();
                             paste_rules = new_config.input.paste_rules.clone();
+                            default_output_mode = new_config.input.default_output_mode;
                             min_duration = new_config.audio.min_duration;
                             energy_threshold = new_config.audio.energy_threshold;
                             noise_cancellation = new_config.audio.noise_cancellation;
@@ -933,6 +940,7 @@ impl SttService {
                                     input_method: &input_method,
                                     paste_command: &paste_command,
                                     paste_rules: &paste_rules,
+                                default_output_mode,
                                     min_duration,
                                     energy_threshold,
                                     noise_cancellation,
@@ -1210,6 +1218,7 @@ mod tests {
             input_method: "auto",
             paste_command: "meta+v",
             paste_rules: &[],
+            default_output_mode: crate::config::OutputMode::Paste,
             min_duration: 0.5,
             energy_threshold: 0.0,
             noise_cancellation: false,
@@ -1265,6 +1274,7 @@ mod tests {
             input_method: "auto",
             paste_command: "meta+v",
             paste_rules: &[],
+            default_output_mode: crate::config::OutputMode::Paste,
             min_duration: 0.5,
             energy_threshold: 0.0,
             noise_cancellation: false,

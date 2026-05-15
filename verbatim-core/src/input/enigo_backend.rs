@@ -8,7 +8,7 @@ use enigo::{Enigo, Key, Keyboard, Settings};
 use super::window_detect::{has_command, is_wayland};
 use super::window_detect::get_active_window_class;
 use super::InputMethod;
-use crate::config::PasteRule;
+use crate::config::{OutputMode, PasteRule};
 use crate::errors::InputError;
 
 // =============================================================================
@@ -46,6 +46,11 @@ mod macos_cgevent {
         ) -> CGEventRef;
         fn CGEventPost(tap: i32, event: CGEventRef);
         fn CGEventSetFlags(event: CGEventRef, flags: u64);
+        fn CGEventKeyboardSetUnicodeString(
+            event: CGEventRef,
+            string_length: usize,
+            unicode_string: *const u16,
+        );
         fn CFRelease(cf: *mut c_void);
     }
 
@@ -126,6 +131,53 @@ mod macos_cgevent {
             "meta" | "super" | "win" | "cmd" | "command" => K_CG_EVENT_FLAG_MASK_COMMAND,
             _ => 0,
         }
+    }
+
+    /// Type `text` by posting synthetic key events carrying its Unicode payload.
+    /// CGEventKeyboardSetUnicodeString is thread-safe (unlike enigo/TSM), so this is
+    /// the safe path from the STT background thread.
+    pub fn type_unicode_string(text: &str) -> Result<(), InputError> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        // Apple recommends batches of <= 20 UTF-16 code units per event.
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        unsafe {
+            let source = CGEventSourceCreate(K_CG_EVENT_SOURCE_STATE_HID);
+            if source.is_null() {
+                return Err(InputError::SimulationFailed(
+                    "Failed to create CGEventSource".into(),
+                ));
+            }
+            for chunk in utf16.chunks(20) {
+                // virtual_key=0 is fine; CGEventKeyboardSetUnicodeString overrides the payload.
+                let key_down = CGEventCreateKeyboardEvent(source, 0, true);
+                if key_down.is_null() {
+                    CFRelease(source);
+                    return Err(InputError::SimulationFailed(
+                        "Failed to create key down event".into(),
+                    ));
+                }
+                CGEventKeyboardSetUnicodeString(key_down, chunk.len(), chunk.as_ptr());
+                CGEventPost(K_CG_HID_EVENT_TAP, key_down);
+
+                let key_up = CGEventCreateKeyboardEvent(source, 0, false);
+                if key_up.is_null() {
+                    CFRelease(key_down);
+                    CFRelease(source);
+                    return Err(InputError::SimulationFailed(
+                        "Failed to create key up event".into(),
+                    ));
+                }
+                CGEventKeyboardSetUnicodeString(key_up, chunk.len(), chunk.as_ptr());
+                CGEventPost(K_CG_HID_EVENT_TAP, key_up);
+
+                CFRelease(key_up);
+                CFRelease(key_down);
+            }
+            CFRelease(source);
+        }
+        Ok(())
     }
 
     pub fn paste_via_cgevent(modifiers: &[String], key_name: &str) -> Result<(), InputError> {
@@ -277,14 +329,21 @@ pub struct EnigoBackend {
     method: Method,
     paste_command: String,
     paste_rules: Vec<PasteRule>,
+    default_output_mode: OutputMode,
 }
 
 impl EnigoBackend {
-    pub fn new(input_method: &str, paste_command: &str, paste_rules: &[PasteRule]) -> Result<Self, InputError> {
+    pub fn new(
+        input_method: &str,
+        paste_command: &str,
+        paste_rules: &[PasteRule],
+        default_output_mode: OutputMode,
+    ) -> Result<Self, InputError> {
         tracing::debug!(
             input_method,
             paste_command,
             paste_rules_count = paste_rules.len(),
+            ?default_output_mode,
             "creating EnigoBackend"
         );
 
@@ -296,26 +355,32 @@ impl EnigoBackend {
             method: Method::from_config(input_method),
             paste_command: paste_command.to_string(),
             paste_rules: paste_rules.to_vec(),
+            default_output_mode,
         })
     }
 
-    /// Resolve the paste command based on the currently focused app.
-    fn resolve_paste_command(&self) -> &str {
-        tracing::trace!(rules_count = self.paste_rules.len(), "resolving paste command");
-        if self.paste_rules.is_empty() {
-            return &self.paste_command;
-        }
-        if let Some(class) = get_active_window_class() {
-            let class_lower = class.to_lowercase();
-            for rule in &self.paste_rules {
-                if class_lower.contains(&rule.app_class.to_lowercase()) {
-                    tracing::debug!("Matched paste rule for '{}': {}", class, rule.paste_command);
-                    return &rule.paste_command;
+    /// Resolve the output strategy (mode + paste shortcut) for the currently
+    /// focused app. Per-app rules take precedence over the global defaults.
+    fn resolve_output(&self) -> (OutputMode, String) {
+        tracing::trace!(rules_count = self.paste_rules.len(), "resolving output strategy");
+        if !self.paste_rules.is_empty() {
+            if let Some(class) = get_active_window_class() {
+                let class_lower = class.to_lowercase();
+                for rule in &self.paste_rules {
+                    if class_lower.contains(&rule.app_class.to_lowercase()) {
+                        tracing::debug!(
+                            app = %class,
+                            cmd = %rule.paste_command,
+                            mode = ?rule.output_mode,
+                            "matched per-app rule"
+                        );
+                        return (rule.output_mode, rule.paste_command.clone());
+                    }
                 }
             }
         }
-        tracing::trace!(default = %self.paste_command, "no paste rule matched, using default");
-        &self.paste_command
+        tracing::trace!(default = %self.paste_command, mode = ?self.default_output_mode, "using global default");
+        (self.default_output_mode, self.paste_command.clone())
     }
 }
 
@@ -385,11 +450,66 @@ fn paste_via_enigo(enigo: &mut Enigo, paste: &PasteKeys) -> Result<(), InputErro
     Ok(())
 }
 
+/// Type the text directly via `wtype --` (no key combos), used on Wayland for OutputMode::Type.
+#[cfg(not(target_os = "macos"))]
+fn type_via_wtype(text: &str) -> Result<(), InputError> {
+    tracing::debug!(chars = text.len(), "typing via wtype --");
+    if !has_command("wtype") {
+        return Err(InputError::SimulationFailed(
+            "wtype is not installed (sudo apt install wtype)".into(),
+        ));
+    }
+    let status = Command::new("wtype")
+        .arg("--")
+        .arg(text)
+        .status()
+        .map_err(|e| InputError::SimulationFailed(format!("wtype: {}", e)))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(InputError::SimulationFailed("wtype typing failed".into()))
+    }
+}
+
 impl InputMethod for EnigoBackend {
     fn type_text(&mut self, text: &str) -> Result<(), InputError> {
         tracing::debug!(chars = text.len(), method = ?self.method, "type_text called");
+        let (mode, cmd) = self.resolve_output();
+
+        // ── Type mode: synthesize keystrokes for each character ──────────
+        if mode == OutputMode::Type {
+            #[cfg(target_os = "macos")]
+            {
+                macos_cgevent::type_unicode_string(text)?;
+                tracing::debug!("Typed {} chars via CGEvent Unicode", text.len());
+                return Ok(());
+            }
+            #[cfg(not(target_os = "macos"))]
+            return match self.method {
+                Method::Wtype => type_via_wtype(text),
+                Method::Enigo => {
+                    self.enigo
+                        .text(text)
+                        .map_err(|e| InputError::SimulationFailed(e.to_string()))?;
+                    tracing::debug!("Typed {} chars via enigo", text.len());
+                    Ok(())
+                }
+                Method::Auto => {
+                    if is_wayland() {
+                        type_via_wtype(text)
+                    } else {
+                        self.enigo
+                            .text(text)
+                            .map_err(|e| InputError::SimulationFailed(e.to_string()))?;
+                        tracing::debug!("Typed {} chars via enigo", text.len());
+                        Ok(())
+                    }
+                }
+            };
+        }
+
+        // ── Paste mode (default): send the paste shortcut ────────────────
         let _ = text; // text is already on clipboard
-        let cmd = self.resolve_paste_command().to_string();
         let paste = parse_paste_command(&cmd);
 
         // On macOS, always use CGEvent to avoid TSM thread-safety crash (EXC_BREAKPOINT).
@@ -406,7 +526,7 @@ impl InputMethod for EnigoBackend {
             Method::Wtype => paste_via_wtype(&paste),
             Method::Enigo => {
                 paste_via_enigo(&mut self.enigo, &paste)?;
-                tracing::debug!("Pasted {} chars via enigo ({})", text.len(), self.paste_command);
+                tracing::debug!("Pasted {} chars via enigo ({})", text.len(), cmd);
                 Ok(())
             }
             Method::Auto => {
@@ -416,7 +536,7 @@ impl InputMethod for EnigoBackend {
                     paste_via_wtype(&paste)
                 } else {
                     paste_via_enigo(&mut self.enigo, &paste)?;
-                    tracing::debug!("Pasted {} chars via enigo ({})", text.len(), self.paste_command);
+                    tracing::debug!("Pasted {} chars via enigo ({})", text.len(), cmd);
                     Ok(())
                 }
             }

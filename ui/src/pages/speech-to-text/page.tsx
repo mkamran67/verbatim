@@ -414,12 +414,25 @@ export default function SpeechToText() {
             </SettingRow>
           )}
 
-          <SettingRow label={t('stt.defaultPasteCommand')} description={t('stt.defaultPasteCommandDesc')}>
-            <PasteKeyButton
-              value={config.input.paste_command}
-              onChange={(v) => update((c) => { c.input.paste_command = v; })}
+          <SettingRow label={t('stt.defaultOutputMode')} description={t('stt.defaultOutputModeDesc')}>
+            <Select
+              value={config.input.default_output_mode ?? 'paste'}
+              onChange={(val) => update((c) => { c.input.default_output_mode = val as 'paste' | 'type'; })}
+              options={[
+                { value: 'paste', label: t('stt.outputModePaste') },
+                { value: 'type', label: t('stt.outputModeType') },
+              ]}
             />
           </SettingRow>
+
+          {(config.input.default_output_mode ?? 'paste') === 'paste' && (
+            <SettingRow label={t('stt.defaultPasteCommand')} description={t('stt.defaultPasteCommandDesc')}>
+              <PasteKeyButton
+                value={config.input.paste_command}
+                onChange={(v) => update((c) => { c.input.paste_command = v; })}
+              />
+            </SettingRow>
+          )}
 
           <div className="py-4 border-b border-slate-50 dark:border-slate-700 last:border-0">
             <div className="flex items-center justify-between mb-3">
@@ -444,7 +457,7 @@ export default function SpeechToText() {
                     );
                     if (!alreadyExists) {
                       update((c) => {
-                        c.input.paste_rules.push({ app_class: appClass, paste_command: 'ctrl+shift+v' });
+                        c.input.paste_rules.push({ app_class: appClass, paste_command: 'ctrl+shift+v', output_mode: 'paste' });
                       });
                     }
                   }}
@@ -458,24 +471,42 @@ export default function SpeechToText() {
                 />
               </div>
             </div>
-            {config.input.paste_rules.map((rule: PasteRule, i: number) => (
-              <div key={i} className="flex items-center gap-2 mb-2">
-                <span className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 w-40 font-mono truncate" title={rule.app_class}>
-                  {rule.app_class}
-                </span>
-                <PasteKeyButton
-                  value={rule.paste_command}
-                  onChange={(v) => update((c) => { c.input.paste_rules[i].paste_command = v; })}
-                />
-                <button
-                  onClick={() => update((c) => { c.input.paste_rules.splice(i, 1); })}
-                  className="text-slate-400 hover:text-red-500 cursor-pointer p-1"
-                  title="Remove rule"
-                >
-                  <i className="ri-delete-bin-line text-sm" />
-                </button>
-              </div>
-            ))}
+            {config.input.paste_rules.map((rule: PasteRule, i: number) => {
+              const mode = rule.output_mode ?? 'paste';
+              return (
+                <div key={i} className="flex items-center gap-2 mb-2">
+                  <span className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-2 w-40 font-mono truncate" title={rule.app_class}>
+                    {rule.app_class}
+                  </span>
+                  <Select
+                    value={mode}
+                    onChange={(val) => update((c) => { c.input.paste_rules[i].output_mode = val as 'paste' | 'type'; })}
+                    options={[
+                      { value: 'paste', label: t('stt.outputModePaste') },
+                      { value: 'type', label: t('stt.outputModeType') },
+                    ]}
+                  />
+                  {mode === 'paste' && (
+                    <PasteKeyButton
+                      value={rule.paste_command}
+                      onChange={(v) => update((c) => { c.input.paste_rules[i].paste_command = v; })}
+                    />
+                  )}
+                  {mode === 'type' && (
+                    <span className="text-xs text-slate-400 dark:text-slate-500 italic">
+                      {t('stt.outputModeTypeHint')}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => update((c) => { c.input.paste_rules.splice(i, 1); })}
+                    className="text-slate-400 hover:text-red-500 cursor-pointer p-1 ml-auto"
+                    title="Remove rule"
+                  >
+                    <i className="ri-delete-bin-line text-sm" />
+                  </button>
+                </div>
+              );
+            })}
             {config.input.paste_rules.length === 0 && (
               <p className="text-slate-300 dark:text-slate-600 text-xs italic">{t('stt.noPerAppRules')}</p>
             )}

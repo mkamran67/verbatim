@@ -212,10 +212,27 @@ pub struct AudioConfig {
     pub play_chimes: bool,
 }
 
+/// How transcribed text should be inserted into the focused app.
+/// `Paste` (default): copy to clipboard + send the paste shortcut.
+/// `Type`: simulate keystrokes for each character. Useful for apps that
+/// block paste (RDP/VNC, banking forms, games, custom electron apps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputMode {
+    Paste,
+    Type,
+}
+
+impl Default for OutputMode {
+    fn default() -> Self { OutputMode::Paste }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PasteRule {
     pub app_class: String,
     pub paste_command: String,
+    #[serde(default)]
+    pub output_mode: OutputMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +243,8 @@ pub struct InputConfig {
     pub paste_command: String,
     #[serde(default)]
     pub paste_rules: Vec<PasteRule>,
+    #[serde(default)]
+    pub default_output_mode: OutputMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +433,7 @@ impl Default for InputConfig {
             method: default_input_method(),
             paste_command: default_paste_command(),
             paste_rules: vec![],
+            default_output_mode: OutputMode::default(),
         }
     }
 }
@@ -1040,13 +1060,47 @@ baz = 42
     fn test_config_paste_rules_roundtrip() {
         let mut config = Config::default();
         config.input.paste_rules = vec![
-            PasteRule { app_class: "Terminal".into(), paste_command: "ctrl+shift+v".into() },
-            PasteRule { app_class: "Firefox".into(), paste_command: "ctrl+v".into() },
+            PasteRule { app_class: "Terminal".into(), paste_command: "ctrl+shift+v".into(), output_mode: OutputMode::Paste },
+            PasteRule { app_class: "Firefox".into(), paste_command: "ctrl+v".into(), output_mode: OutputMode::Paste },
         ];
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.input.paste_rules.len(), 2);
         assert_eq!(parsed.input.paste_rules[0].app_class, "Terminal");
         assert_eq!(parsed.input.paste_rules[1].paste_command, "ctrl+v");
+    }
+
+    #[test]
+    fn test_paste_rule_output_mode_default_is_paste() {
+        // Old config files without `output_mode` should deserialize as Paste.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let toml_content = r#"
+[input]
+paste_command = "ctrl+v"
+
+[[input.paste_rules]]
+app_class = "Terminal"
+paste_command = "ctrl+shift+v"
+"#;
+        std::fs::write(&path, toml_content).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.input.default_output_mode, OutputMode::Paste);
+        assert_eq!(config.input.paste_rules[0].output_mode, OutputMode::Paste);
+    }
+
+    #[test]
+    fn test_paste_rule_output_mode_type_roundtrip() {
+        let mut config = Config::default();
+        config.input.default_output_mode = OutputMode::Type;
+        config.input.paste_rules = vec![PasteRule {
+            app_class: "VirtualBox".into(),
+            paste_command: "ctrl+v".into(),
+            output_mode: OutputMode::Type,
+        }];
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.input.default_output_mode, OutputMode::Type);
+        assert_eq!(parsed.input.paste_rules[0].output_mode, OutputMode::Type);
     }
 }

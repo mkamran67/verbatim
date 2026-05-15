@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Layout from '../../components/feature/Layout';
+import Greeting from './components/Greeting';
 import StatsCards from './components/StatsCards';
 import RecentTranscriptions from './components/RecentTranscriptions';
 import ActivityChart from './components/ActivityChart';
@@ -266,6 +267,9 @@ export default function Home() {
 
   return (
     <Layout title={t('home.title')} subtitle={t('home.subtitle')}>
+      <div className="max-w-[1200px] mb-4">
+        <Greeting />
+      </div>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

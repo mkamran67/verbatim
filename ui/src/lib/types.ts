@@ -63,9 +63,12 @@ export interface Stats {
   total_cost_usd: number;
 }
 
+export type OutputMode = 'paste' | 'type';
+
 export interface PasteRule {
   app_class: string;
   paste_command: string;
+  output_mode: OutputMode;
 }
 
 export interface Hotkey {
@@ -111,6 +114,7 @@ export interface Config {
     method: string;
     paste_command: string;
     paste_rules: PasteRule[];
+    default_output_mode: OutputMode;
   };
   post_processing: {
     enabled: boolean;
