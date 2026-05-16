@@ -5,6 +5,7 @@ use verbatim_core::app::{SttCommand, SttEvent};
 use verbatim_core::config::Config;
 use verbatim_core::db::SharedDatabase;
 use verbatim_core::hotkey::CaptureSlot;
+use verbatim_core::rotation::RotationState;
 
 pub struct CachedBalance {
     pub balance: f64,
@@ -52,6 +53,9 @@ pub struct AppState {
     /// Latest STT app state, mirrored from the event stream. 0=Idle, 1=Recording, 2=Processing.
     /// Read by the macOS tray icon to drive its status row + recording animation.
     pub current_app_state: Arc<AtomicU8>,
+    /// In-process rotation state. Mutated by `record_provider_failure` /
+    /// `record_provider_success` and read by `get_rotation_status`.
+    pub rotation: Arc<std::sync::Mutex<RotationState>>,
 }
 
 pub fn encode_app_state(s: verbatim_core::app::AppState) -> u8 {

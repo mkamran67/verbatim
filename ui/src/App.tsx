@@ -7,6 +7,7 @@ import { Provider } from "react-redux";
 import { store } from "./store";
 import { useAppDispatch, useAppSelector } from "./store/hooks";
 import { useTauriListeners } from "./store/useTauriListeners";
+import { useRotationBridge } from "./store/useRotationBridge";
 import { fetchConfig } from "./store/slices/configSlice";
 import { fetchStats } from "./store/slices/statsSlice";
 import { fetchWhisperModels, fetchLlmModels } from "./store/slices/modelsSlice";
@@ -15,11 +16,13 @@ import { fetchDeepgramBalance } from "./store/slices/balanceSlice";
 import { fetchRecent } from "./store/slices/transcriptionsSlice";
 import { applyTheme } from "./lib/theme";
 import { api } from "./lib/tauri";
+import { ToastProvider } from "./components/ui/Toast";
 
 function TauriEventBridge() {
   const dispatch = useAppDispatch();
 
   useTauriListeners();
+  useRotationBridge();
 
   useEffect(() => {
     dispatch(fetchConfig()).then((action) => {
@@ -110,13 +113,15 @@ function App() {
   return (
     <I18nextProvider i18n={i18n}>
       <Provider store={store}>
-        <ThemeApplier />
-        <HashRouter>
-          <TauriEventBridge />
-          <PermissionGate>
-            <AppRoutes />
-          </PermissionGate>
-        </HashRouter>
+        <ToastProvider>
+          <ThemeApplier />
+          <HashRouter>
+            <TauriEventBridge />
+            <PermissionGate>
+              <AppRoutes />
+            </PermissionGate>
+          </HashRouter>
+        </ToastProvider>
       </Provider>
     </I18nextProvider>
   );

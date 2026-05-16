@@ -5,6 +5,7 @@ import { api } from '@/lib/tauri';
 import type { Config } from '@/lib/types';
 import { SettingRow, Toggle } from './components/SettingRow';
 import DebugSection from './components/DebugSection';
+import RotationAdvanced from './components/RotationAdvanced';
 import Select from '@/components/ui/Select';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { saveConfig } from '@/store/slices/configSlice';
@@ -119,6 +120,21 @@ export default function Settings() {
               options={languageOptions.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
             />
           </SettingRow>
+        </div>
+
+        {/* Model Rotation */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700 p-5">
+          <h3 className="text-slate-900 dark:text-slate-100 font-semibold text-sm mb-1">{t('settings.rotation')}</h3>
+          <p className="text-slate-400 dark:text-slate-500 text-xs mb-5">{t('settings.rotationDesc')}</p>
+
+          <SettingRow label={t('settings.rotationToggle')} description={t('settings.rotationToggleDesc')}>
+            <Toggle
+              on={config.rotation.enabled}
+              onChange={(v) => update((c) => { c.rotation.enabled = v; })}
+            />
+          </SettingRow>
+
+          <RotationAdvanced config={config} update={update} />
         </div>
 
         {/* Mic Test */}

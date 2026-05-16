@@ -6,6 +6,7 @@ import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { fetchStats, fetchDailyTokenUsage, fetchDailyProviderUsage } from '@/store/slices/statsSlice';
 import { fetchModelUsage, fetchProviderCosts } from '@/store/slices/transcriptionsSlice';
 import { fetchDeepgramBalance } from '@/store/slices/balanceSlice';
+import { api } from '@/lib/tauri';
 import type { DailyTokenUsage, DailyProviderUsage } from '@/lib/types';
 import {
   STT_TOKENS_PER_SEC,
@@ -112,6 +113,32 @@ export default function ApiUsage() {
       .filter((p) => p.provider.startsWith('openai'))
       .reduce((sum, p) => sum + p.total_cost_usd, 0);
   }, [providerCosts]);
+
+  // Notify the rotation engine when a manual balance crosses zero. The
+  // per-session ref prevents repeat dispatches on every spend update.
+  useEffect(() => {
+    const exhaustedKey = `manualBalance.exhausted.notified`;
+    const notified: Record<string, boolean> = (() => {
+      try { return JSON.parse(sessionStorage.getItem(exhaustedKey) || '{}'); }
+      catch { return {}; }
+    })();
+    const check = (provider: ManualProvider) => {
+      const mb = provider === 'deepgram' ? manualDeepgram : provider === 'openai' ? manualOpenai : manualSmallest;
+      if (!mb) { delete notified[provider]; return; }
+      const spent = Math.max(0, providerSpend(provider) - mb.baselineSpend);
+      const remaining = mb.initial - spent;
+      if (remaining <= 0 && !notified[provider]) {
+        notified[provider] = true;
+        api.forceProviderExhausted(provider).catch(console.error);
+      } else if (remaining > 0 && notified[provider]) {
+        delete notified[provider];
+      }
+    };
+    check('deepgram');
+    check('openai');
+    check('smallest');
+    sessionStorage.setItem(exhaustedKey, JSON.stringify(notified));
+  }, [manualDeepgram, manualOpenai, manualSmallest, providerSpend]);
 
   const manualBalanceFor = (provider: ManualProvider): ManualBalance | null => {
     if (provider === 'deepgram') return manualDeepgram;

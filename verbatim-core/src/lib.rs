@@ -16,6 +16,8 @@ pub mod model_manager;
 pub mod ollama_manager;
 pub mod platform;
 pub mod post_processing;
+pub mod provider_error;
+pub mod rotation;
 pub mod stt;
 
 #[cfg(test)]

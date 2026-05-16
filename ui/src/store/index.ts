@@ -6,6 +6,7 @@ import themeReducer from './slices/themeSlice';
 import statsReducer from './slices/statsSlice';
 import transcriptionsReducer from './slices/transcriptionsSlice';
 import balanceReducer from './slices/balanceSlice';
+import rotationReducer from './slices/rotationSlice';
 
 export const store = configureStore({
   reducer: {
@@ -16,6 +17,7 @@ export const store = configureStore({
     stats: statsReducer,
     transcriptions: transcriptionsReducer,
     balance: balanceReducer,
+    rotation: rotationReducer,
   },
 });
 

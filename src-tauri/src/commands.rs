@@ -2270,3 +2270,173 @@ fn version_newer_than(latest: &str, current: &str) -> bool {
     };
     parse(latest) > parse(current)
 }
+
+// ── Provider rotation commands ───────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ProviderStatus {
+    pub provider: String,
+    /// "active" | "cooling" | "exhausted" | "auth_error"
+    pub state: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ProviderStatusChangedPayload {
+    pub provider: String,
+    /// "stt" or "post_processing"
+    pub kind: String,
+    /// "exhausted" | "failed_over" | "auth_error" | "recovered"
+    pub event: String,
+    pub message: String,
+}
+
+fn status_for_all(rotation: &verbatim_core::rotation::RotationState) -> Vec<ProviderStatus> {
+    let providers = [
+        "whisper-local",
+        "openai",
+        "deepgram",
+        "smallest",
+        "ollama",
+    ];
+    providers
+        .iter()
+        .map(|p| ProviderStatus {
+            provider: (*p).to_string(),
+            state: rotation.status_label(p).to_string(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn get_rotation_status(state: State<'_, AppState>) -> Result<Vec<ProviderStatus>, String> {
+    let rotation = state.rotation.lock().map_err(|e| e.to_string())?;
+    Ok(status_for_all(&rotation))
+}
+
+/// Called by the UI when it observes a provider failure (e.g. PostProcessorError
+/// event with a quota body, or manual balance crossing zero). Classifies the
+/// failure, records it in the rotation engine, emits `provider-status-changed`,
+/// and — if rotation is enabled — applies the next available provider to the
+/// running config (which also notifies the STT service).
+#[tauri::command]
+pub async fn record_provider_failure(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    provider: String,
+    kind: String,            // "stt" | "post_processing"
+    status_code: Option<u16>,
+    body: Option<String>,
+) -> Result<(), String> {
+    use verbatim_core::provider_error::{classify, ProviderFailure};
+    use verbatim_core::rotation::ProviderKind;
+
+    let failure = classify(status_code, body.as_deref().unwrap_or(""));
+    let provider_kind = match kind.as_str() {
+        "stt" => ProviderKind::Stt,
+        "post_processing" => ProviderKind::PostProcessing,
+        other => return Err(format!("unknown kind: {}", other)),
+    };
+
+    tracing::info!(%provider, %kind, ?failure, "recording provider failure");
+
+    let (event_kind, message) = {
+        let mut rot = state.rotation.lock().map_err(|e| e.to_string())?;
+        rot.record_failure(provider_kind, &provider, failure);
+        let (ek, msg) = match failure {
+            ProviderFailure::Exhausted => ("exhausted", format!("{} is out of credit/quota", provider)),
+            ProviderFailure::AuthError => ("auth_error", format!("{} credentials rejected", provider)),
+            ProviderFailure::RateLimited => ("failed_over", format!("{} is rate-limited", provider)),
+            ProviderFailure::Transient => ("failed_over", format!("{} had a transient error", provider)),
+            ProviderFailure::Other => ("failed_over", format!("{} returned an error", provider)),
+        };
+        (ek.to_string(), msg)
+    };
+
+    let _ = app_handle.emit(
+        "provider-status-changed",
+        ProviderStatusChangedPayload {
+            provider: provider.clone(),
+            kind: kind.clone(),
+            event: event_kind,
+            message: message.clone(),
+        },
+    );
+
+    // If rotation is enabled, recompute the active provider and apply.
+    let cfg_clone = { state.config.lock().await.clone() };
+    if cfg_clone.rotation.enabled {
+        let next = {
+            let rot = state.rotation.lock().map_err(|e| e.to_string())?;
+            match provider_kind {
+                ProviderKind::Stt => rot.pick_stt(&cfg_clone),
+                ProviderKind::PostProcessing => rot.pick_pp(&cfg_clone),
+            }
+        };
+        let current = match provider_kind {
+            ProviderKind::Stt => cfg_clone.general.backend.clone(),
+            ProviderKind::PostProcessing => cfg_clone.post_processing.provider.clone(),
+        };
+        if next != current {
+            let mut new_cfg = cfg_clone.clone();
+            match provider_kind {
+                ProviderKind::Stt => new_cfg.general.backend = next.clone(),
+                ProviderKind::PostProcessing => new_cfg.post_processing.provider = next.clone(),
+            }
+            tracing::info!(from = %current, to = %next, "rotation: switching active provider");
+            new_cfg.save().map_err(|e| e.to_string())?;
+            let _ = state.stt_cmd_tx.send(SttCommand::UpdateConfig(new_cfg.clone()));
+            *state.config.lock().await = new_cfg;
+            let _ = app_handle.emit(
+                "provider-status-changed",
+                ProviderStatusChangedPayload {
+                    provider: next,
+                    kind,
+                    event: "failed_over".into(),
+                    message: format!("Switched away from {}", provider),
+                },
+            );
+            let _ = app_handle.emit("config-changed", ());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn record_provider_success(
+    state: State<'_, AppState>,
+    provider: String,
+    kind: String,
+) -> Result<(), String> {
+    use verbatim_core::rotation::ProviderKind;
+    let pk = match kind.as_str() {
+        "stt" => ProviderKind::Stt,
+        "post_processing" => ProviderKind::PostProcessing,
+        other => return Err(format!("unknown kind: {}", other)),
+    };
+    let mut rot = state.rotation.lock().map_err(|e| e.to_string())?;
+    rot.record_success(pk, &provider);
+    Ok(())
+}
+
+/// Forced exhaustion (e.g. UI observed manual balance crossing zero).
+#[tauri::command]
+pub async fn force_provider_exhausted(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    provider: String,
+) -> Result<(), String> {
+    {
+        let mut rot = state.rotation.lock().map_err(|e| e.to_string())?;
+        rot.force_exhaust(&provider);
+    }
+    let _ = app_handle.emit(
+        "provider-status-changed",
+        ProviderStatusChangedPayload {
+            provider: provider.clone(),
+            kind: "stt".into(),
+            event: "exhausted".into(),
+            message: format!("{} balance is exhausted", provider),
+        },
+    );
+    Ok(())
+}

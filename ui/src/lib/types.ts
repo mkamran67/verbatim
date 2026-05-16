@@ -136,6 +136,26 @@ export interface Config {
   llm: {
     model_dir: string;
   };
+  rotation: {
+    enabled: boolean;
+    stt_order: string[];
+    pp_order: string[];
+  };
+}
+
+export interface ProviderStatus {
+  provider: string;
+  /** "active" | "cooling" | "exhausted" | "auth_error" */
+  state: string;
+}
+
+export interface ProviderStatusChanged {
+  provider: string;
+  /** "stt" | "post_processing" */
+  kind: string;
+  /** "exhausted" | "failed_over" | "auth_error" | "recovered" */
+  event: string;
+  message: string;
 }
 
 export type Platform = 'apple_silicon' | 'linux' | 'other';

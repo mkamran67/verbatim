@@ -128,11 +128,15 @@ fn main() {
         handsfree_capture: handsfree_capture_for_state,
         recording_level: recording_level.clone(),
         current_app_state: Arc::new(AtomicU8::new(0)),
+        rotation: Arc::new(std::sync::Mutex::new(
+            verbatim_core::rotation::RotationState::new(),
+        )),
     };
 
     tracing::debug!("building Tauri application");
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
@@ -179,6 +183,10 @@ fn main() {
             commands::check_for_update,
             commands::get_debug_info,
             commands::open_path,
+            commands::get_rotation_status,
+            commands::record_provider_failure,
+            commands::record_provider_success,
+            commands::force_provider_exhausted,
         ])
         .setup(move |app| {
             tracing::debug!("Tauri setup: starting STT event forwarding loop");

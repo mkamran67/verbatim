@@ -10,6 +10,8 @@ import type {
   DebugInfo,
   FactoryResetReport,
   ProviderCostSummary,
+  ProviderStatus,
+  ProviderStatusChanged,
   Stats,
   SystemInfo,
   Transcription,
@@ -98,6 +100,13 @@ export const api = {
   checkForUpdate: () => invoke<UpdateInfo>("check_for_update"),
   getDebugInfo: () => invoke<DebugInfo>("get_debug_info"),
   openPath: (path: string) => invoke<void>("open_path", { path }),
+  getRotationStatus: () => invoke<ProviderStatus[]>("get_rotation_status"),
+  recordProviderFailure: (provider: string, kind: 'stt' | 'post_processing', statusCode?: number, body?: string) =>
+    invoke<void>("record_provider_failure", { provider, kind, statusCode, body }),
+  recordProviderSuccess: (provider: string, kind: 'stt' | 'post_processing') =>
+    invoke<void>("record_provider_success", { provider, kind }),
+  forceProviderExhausted: (provider: string) =>
+    invoke<void>("force_provider_exhausted", { provider }),
 };
 
 export function onModelDownloadProgress(
@@ -124,4 +133,12 @@ export function onSttEvent(
 
 export function onConfigChanged(callback: () => void): Promise<UnlistenFn> {
   return listen<void>("config-changed", () => callback());
+}
+
+export function onProviderStatusChanged(
+  callback: (event: ProviderStatusChanged) => void
+): Promise<UnlistenFn> {
+  return listen<ProviderStatusChanged>("provider-status-changed", (e) =>
+    callback(e.payload)
+  );
 }

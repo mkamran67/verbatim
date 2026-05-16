@@ -146,6 +146,38 @@ pub struct Config {
     pub hands_free: HandsFreeConfig,
     #[serde(default)]
     pub llm: LlmConfig,
+    #[serde(default)]
+    pub rotation: RotationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RotationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Ordered list of STT backend ids: "whisper-local", "openai",
+    /// "deepgram", "smallest". First entry is the primary.
+    #[serde(default = "default_stt_order")]
+    pub stt_order: Vec<String>,
+    /// Ordered list of post-processing provider ids: "openai", "ollama".
+    #[serde(default = "default_pp_order")]
+    pub pp_order: Vec<String>,
+}
+
+fn default_stt_order() -> Vec<String> {
+    vec!["whisper-local".into(), "openai".into(), "deepgram".into(), "smallest".into()]
+}
+fn default_pp_order() -> Vec<String> {
+    vec!["openai".into(), "ollama".into()]
+}
+
+impl Default for RotationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            stt_order: default_stt_order(),
+            pp_order: default_pp_order(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -486,6 +518,7 @@ impl Default for Config {
             post_processing: PostProcessingConfig::default(),
             hands_free: HandsFreeConfig::default(),
             llm: LlmConfig::default(),
+            rotation: RotationConfig::default(),
         }
     }
 }
